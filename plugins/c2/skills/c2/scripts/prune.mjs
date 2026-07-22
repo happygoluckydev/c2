@@ -12,4 +12,13 @@ const used = new Set(); for (const file of sessionFiles) { try { const text = fs
 const unused = installed.filter((skill) => !used.has(skill.name)); const canArchive = sessionFiles.length > 0;
 console.log(JSON.stringify({ installed: installed.length, sessionFilesScanned: sessionFiles.length, used: [...used], unused: unused.map((skill) => skill.name), estimatedTaxTokensPerSession: unused.reduce((sum, skill) => sum + skill.tokens, 0), mode: apply ? 'apply' : 'dry-run', archiveAllowed: canArchive }, null, 2));
 if (apply && !canArchive) { console.error('No Codex session transcripts were found; refusing to archive skills because usage cannot be determined.'); process.exitCode = 2; }
-else if (apply && unused.length) { fs.mkdirSync(archiveDir, { recursive: true }); for (const skill of unused) fs.renameSync(path.join(skillsDir, skill.dir), path.join(archiveDir, skill.dir)); console.log(`Archived ${unused.length} skills in ${archiveDir}.`); }
+else if (apply && unused.length) {
+  fs.mkdirSync(archiveDir, { recursive: true });
+  let archived = 0;
+  for (const skill of unused) {
+    const dest = path.join(archiveDir, skill.dir);
+    try { fs.renameSync(path.join(skillsDir, skill.dir), fs.existsSync(dest) ? `${dest}-${Date.now()}` : dest); archived += 1; }
+    catch (error) { console.error(`Failed to archive ${skill.dir}: ${error.message}`); }
+  }
+  console.log(`Archived ${archived} skills in ${archiveDir}.`);
+}

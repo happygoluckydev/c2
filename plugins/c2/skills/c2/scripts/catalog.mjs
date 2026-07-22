@@ -21,6 +21,11 @@ export function parseFrontmatter(text) {
   return result;
 }
 export const clipped = (text = '') => text.replace(/\0/g, '').slice(0, 4000);
+export function writeAtomic(file, data) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, file);
+}
 export function walk(root, predicate) {
   const files = [];
   if (!fs.existsSync(root)) return files;
@@ -31,7 +36,13 @@ export function walk(root, predicate) {
   }};
   visit(root); return files;
 }
-export function loadConfig() { try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG, 'utf8')) }; } catch { return DEFAULTS; } }
+export function loadConfig() {
+  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG, 'utf8')) }; }
+  catch (error) {
+    if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid config at ${CONFIG}: ${error.message}`);
+    return DEFAULTS;
+  }
+}
 const openAIStyle = (url) => ({ request: (input, p) => [url, { Authorization: `Bearer ${p.key}` }, { model: p.model, input }], extract: (body) => body.data.map((row) => row.embedding) });
 const PROVIDERS = {
   gemini: { keyEnv: 'GEMINI_API_KEY', model: 'text-embedding-004', batch: 100, request: (input, p) => [`https://generativelanguage.googleapis.com/v1beta/models/${p.model}:batchEmbedContents?key=${p.key}`, {}, { requests: input.map((text) => ({ model: `models/${p.model}`, content: { parts: [{ text }] } })) }], extract: (body) => body.embeddings.map((row) => row.values) },
@@ -55,5 +66,13 @@ export async function embedTexts(texts, provider) {
   }
   return vectors;
 }
-export function writeVectors(vectors, meta) { const dims = vectors[0]?.length || 0; const data = new Float32Array(vectors.length * dims); vectors.forEach((v, i) => data.set(v, i * dims)); fs.writeFileSync(VEC_BIN, Buffer.from(data.buffer)); fs.writeFileSync(VEC_META, JSON.stringify({ ...meta, dims, count: vectors.length })); }
-export function readVectors(count) { try { const meta = JSON.parse(fs.readFileSync(VEC_META, 'utf8')); if (!meta.dims || meta.count !== count) return null; const data = fs.readFileSync(VEC_BIN); return { meta, data: new Float32Array(data.buffer, data.byteOffset, data.length / 4) }; } catch { return null; } }
+export function writeVectors(vectors, meta) { const dims = vectors[0]?.length || 0; const data = new Float32Array(vectors.length * dims); vectors.forEach((v, i) => data.set(v, i * dims)); writeAtomic(VEC_BIN, Buffer.from(data.buffer)); writeAtomic(VEC_META, JSON.stringify({ ...meta, dims, count: vectors.length })); }
+export function readVectors(count) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(VEC_META, 'utf8'));
+    if (!meta.dims || meta.count !== count) return null;
+    const data = fs.readFileSync(VEC_BIN);
+    if (data.length !== meta.dims * meta.count * Float32Array.BYTES_PER_ELEMENT) return null;
+    return { meta, data: new Float32Array(data.buffer, data.byteOffset, data.length / 4) };
+  } catch { return null; }
+}
