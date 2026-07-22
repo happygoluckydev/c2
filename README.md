@@ -2,13 +2,16 @@
 
 > **Don't reinvent the wheel.** The Codex ecosystem already ships skills, plugins, and MCP servers — including the ones already installed on your machine. The hard part isn't building your own — it's knowing what already exists. c2 checks *before* you build.
 
-**/c2** tells you the best combination of Codex **skills, plugins, and MCP servers** for whatever task you describe — using a **local catalog** so that each recommendation costs almost zero tokens.
+**/c2** (or the short alias **/cc**) tells you the best combination of Codex **skills, plugins, and MCP servers** for whatever task you describe — using a **local catalog** so that each recommendation costs almost zero tokens.
 
 ```
 /c2 Find a Codex capability for GitHub PR review comments
+/cc Find a Codex capability for GitHub PR review comments
 ```
 
 → Returns a prioritized recommendation table (what to reuse, what to add, what *not* to add) with ready-to-run install commands and a visible search trace.
+
+The plugin ships Codex command prompts in `plugins/c2/commands/`: `/c2` is the primary command, and `/cc` is an alias that runs the same workflow.
 
 ## Demo
 
@@ -57,7 +60,7 @@ flowchart TB
     end
 
     SEARCH["search.mjs<br/>IDF lexical + optional RRF hybrid"]
-    CODEX["Codex CLI<br/>/c2 skill"]
+    CODEX["Codex CLI<br/>/c2 or /cc command"]
 
     sources --> BUILD
     CFG -.-> BUILD
@@ -124,7 +127,7 @@ Catalog builds a local search index on your machine. In default fulltext mode, t
 git clone https://github.com/happygoluckydev/c2.git
 ```
 
-Add the cloned `plugins/c2` directory through the Codex Plugins workflow (or reference it from a personal `~/.agents/plugins/marketplace.json` entry), then start a new session so Codex can discover the `c2` skill. Run `/c2 <task>`.
+Add the cloned `plugins/c2` directory through the Codex Plugins workflow (or reference it from a personal `~/.agents/plugins/marketplace.json` entry), then start a new session so Codex can discover the `c2` skill and commands. Run `/c2 <task>` or `/cc <task>`.
 
 ### Configuration
 
@@ -195,7 +198,7 @@ This never deletes skills, only moves them. Archiving is refused when no Codex s
 
 **「車輪の再発明をしたくない」から生まれたツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。
 
-クロールは HTTP のみ（LLM 不使用）。カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加し、新しいセッションで `/c2 <やりたいこと>` を実行してください。
+クロールは HTTP のみ（LLM 不使用）。カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加し、新しいセッションで `/c2 <やりたいこと>` または `/cc <やりたいこと>` を実行してください。
 
 MIT は **本リポジトリのコード／ドキュメントのみ**に適用されます。カタログが指す第三者のスキル・プラグイン・MCP は各プロジェクトのライセンス・利用条件に従ってください。既定のローカル検索では、`catalog.jsonl` に名前・タグ・説明文に加えてスキル本文の一部（最大 4,000 文字）が保存される場合があります。ベクトル検索を有効にした場合、外部 Embedding API に送信されるのは名前・タグ・説明文とクエリで、fulltext 本文は送信されません。機密タスクでは既定のローカル検索を推奨します。
 
