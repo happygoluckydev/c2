@@ -11,7 +11,11 @@ Use c2 before proposing a new skill, plugin, MCP server, or integration. Search 
 
 ## Workflow
 
-1. **Extract keywords (deterministic rule).** Build 3–6 lowercase English keywords, in this order:
+0. **Normalize the task.** If the user message begins with `/c2` or `/cc`, remove that command prefix before doing anything else. Treat only the remaining text as the task for keyword extraction and as the `--task` value. This prevents the command name itself from matching the c2 skill/plugin. If the remaining task is empty, ask one concise question and stop.
+
+   Keep command invocation quiet: do not narrate "I will run c2" or summarize intermediate search decisions before the final answer unless a tool is blocked, fails, or takes long enough that a brief status update is needed.
+
+1. **Extract keywords (deterministic rule).** Build 3–6 lowercase English keywords from the normalized task, in this order:
    1. Product, integration, or file-type names exactly as they appear in the task (e.g. `stripe`, `pdf`, `postgres`).
    2. The standard English verb/object for the core action (generate → `generation`, send → `send`) — one word, the most common form.
    3. One word per concept — do not list synonyms (don't include both `email` and `mail`).
@@ -21,7 +25,7 @@ Use c2 before proposing a new skill, plugin, MCP server, or integration. Search 
 2. **Search once**, resolving the script path relative to this `SKILL.md`:
 
    ```sh
-   node <c2-skill-dir>/scripts/search.mjs --all "<keywords>" --task "<user task>"
+   node <c2-skill-dir>/scripts/search.mjs --all "<keywords>" --task "<normalized task>"
    ```
 
    Read the trace lines (`catalog`, `mode`, `query`, and `hits`) before considering candidates. Freshness checking and background rebuilds are handled by the script. Only re-run the search — and only once — if the total hits across every kind combined are fewer than 3; otherwise treat the first result set as final.
@@ -47,7 +51,17 @@ Use c2 before proposing a new skill, plugin, MCP server, or integration. Search 
 
 ## Required response
 
-Always include all five sections below, in this order. Do not add or omit sections.
+Always include the five sections below, in this order. Match the user's natural language for headings and prose whenever practical (for example, answer Japanese invocations in Japanese). Keep capability names, install commands, and the `Execution trace` lines exactly as emitted by the tool. Do not expose intermediate reasoning or earlier discarded searches.
+
+Use localized headings when answering in a non-English language, preserving these meanings:
+
+- Recommendation
+- Selection rationale
+- Not selected
+- Safety and access
+- Execution trace
+
+English response template:
 
 ```md
 ## Recommendation

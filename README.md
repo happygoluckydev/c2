@@ -13,6 +13,12 @@
 
 The plugin ships Codex command prompts in `plugins/c2/commands/`: `/c2` is the primary command, and `/cc` is an alias that runs the same workflow.
 
+Command behavior is intentionally quiet and predictable:
+
+- `/c2` and `/cc` strip the command prefix before searching, so the command name itself does not match the c2 plugin.
+- Intermediate search chatter is kept out of the conversation unless something is blocked or slow.
+- The final recommendation follows the user's language when practical; machine trace lines stay verbatim for auditability.
+
 ## Demo
 
 ![c2 skill usage demo](docs/assets/c2-demo.gif)
@@ -79,13 +85,14 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant C as Codex (/c2 skill)
+    participant C as Codex (/c2 or /cc command)
     participant S as search.mjs
     participant B as build-index.mjs
 
-    U->>C: /c2 "task description"
+    U->>C: /c2 or /cc "task description"
+    C->>C: strip command prefix and normalize task
     C->>C: extract 3–6 English keywords
-    C->>S: node search.mjs --all "keywords" --task "原文"
+    C->>S: node search.mjs --all "keywords" --task "normalized task"
     S->>S: freshness check (meta.json)
     alt catalog missing
         S->>B: sync rebuild (HTTP only, no LLM)
@@ -102,7 +109,7 @@ sequenceDiagram
     C->>C: pick up to three finalists by priority policy<br/>(existing capability > installed plugin > official skill/plugin > community skill > MCP)
     C->>S: node search.mjs --get "finalists"
     S-->>C: full JSON with install commands
-    C-->>U: recommendation table + rationale + safety notes
+    C-->>U: localized recommendation table + rationale + safety notes
 ```
 
 ## Catalog sources
@@ -153,13 +160,13 @@ If the configured provider's API key is missing or a request fails, search falls
 Default install is **local-only** (lexical / fulltext). With `vectors` enabled, the chosen provider receives:
 
 - **Catalog rebuild**: names, tags, and descriptions for embedding (not fulltext bodies)
-- **Each `/c2` query**: the search query string (keywords / task text) for one embed call
+- **Each `/c2` or `/cc` query**: the search query string (keywords / task text) for one embed call
 
 API keys stay in your environment variables. Review the provider's terms and data policies before enabling. For confidential task text, keep the default lexical mode (no external embed calls).
 
 ## Keeping the catalog fresh
 
-On `/c2`, `search.mjs` builds the catalog synchronously if it is missing. If it exists but is older than 7 days, the current catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM).
+On `/c2` or `/cc`, `search.mjs` builds the catalog synchronously if it is missing. If it exists but is older than 7 days, the current catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM).
 
 To refresh on a fixed schedule instead:
 
@@ -199,6 +206,8 @@ This never deletes skills, only moves them. Archiving is refused when no Codex s
 **「車輪の再発明をしたくない」から生まれたツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。
 
 クロールは HTTP のみ（LLM 不使用）。カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加し、新しいセッションで `/c2 <やりたいこと>` または `/cc <やりたいこと>` を実行してください。
+
+`/c2` と `/cc` はコマンド名を検索語から除外し、途中経過の説明を抑えて、可能な限りユーザーの言語で最終提案を返します。
 
 MIT は **本リポジトリのコード／ドキュメントのみ**に適用されます。カタログが指す第三者のスキル・プラグイン・MCP は各プロジェクトのライセンス・利用条件に従ってください。既定のローカル検索では、`catalog.jsonl` に名前・タグ・説明文に加えてスキル本文の一部（最大 4,000 文字）が保存される場合があります。ベクトル検索を有効にした場合、外部 Embedding API に送信されるのは名前・タグ・説明文とクエリで、fulltext 本文は送信されません。機密タスクでは既定のローカル検索を推奨します。
 
