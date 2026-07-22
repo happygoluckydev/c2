@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
+// c2: shared module — path constants, config, frontmatter parser, embedding provider, vector I/O
+// (Mirrors c3's skills/ccc/scripts/embed.mjs, adapted for the Codex home layout.)
+// - API keys are read from environment variables only; never written to config, catalog, or logs.
+// - Vectors are L2-normalized and stored as a raw Float32Array binary (JSON would be ~4x larger).
+// - No dependencies: everything below is Node.js standard library plus direct REST calls.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// ~/.codex/c2 is the single data store for this tool. Path constants live only here so a future
+// edit can't create a split-brain between build-index/search/prune reading different locations.
 export const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 export const DATA_DIR = path.join(CODEX_HOME, 'c2');
 export const CATALOG = path.join(DATA_DIR, 'catalog.jsonl');
@@ -10,70 +17,149 @@ export const META = path.join(DATA_DIR, 'meta.json');
 export const VEC_BIN = path.join(DATA_DIR, 'vectors.bin');
 export const VEC_META = path.join(DATA_DIR, 'vectors.json');
 const CONFIG = path.join(DATA_DIR, 'config.json');
+
+// Defaults when config.json is absent = historical behavior (index body text, no vectors).
 const DEFAULTS = { fulltext: true, vectors: { provider: 'none' } };
 
+// Minimal YAML frontmatter parser (name/description only — a full parser would add a dependency
+// for two fields we actually use). fmLen is the frontmatter's character length, used by prune.mjs
+// to estimate the resident-context "tax" a skill costs every session. body is the vocabulary used
+// for full-text search.
 export function parseFrontmatter(text) {
-  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  const result = { fmLen: match ? match[0].length : 0, body: (match ? text.slice(match[0].length) : text).trim() };
-  for (const line of (match?.[1] || '').split(/\r?\n/)) {
-    const field = line.match(/^(name|description)\s*:\s*(.*)$/);
-    if (field) result[field[1]] = field[2].trim().replace(/^['"]|['"]$/g, '');
-  }
-  return result;
+    const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const result = {
+        fmLen: match ? match[0].length : 0,
+        body: (match ? text.slice(match[0].length) : text).trim(),
+    };
+    if (!match) return result;
+    for (const line of match[1].split(/\r?\n/)) {
+        const field = line.match(/^(name|description)\s*:\s*(.*)$/);
+        if (field) result[field[1]] = field[2].trim().replace(/^['"]|['"]$/g, '');
+    }
+    return result;
 }
+
+// First 4000 characters only: keeps the catalog from bloating while still capturing the
+// vocabulary-dense opening of most SKILL.md / plugin docs, so recall barely suffers.
 export const clipped = (text = '') => text.replace(/\0/g, '').slice(0, 4000);
+
+// Write-then-rename so a crash mid-write can never leave catalog.jsonl / meta.json truncated
+// or corrupted for the next search.mjs invocation.
 export function writeAtomic(file, data) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, file);
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, file);
 }
+
+// Recursively collect files under root matching predicate. Skips .git/node_modules so scanning
+// a user's Codex home (which may contain cloned plugin repos) stays fast and side-effect free.
 export function walk(root, predicate) {
-  const files = [];
-  if (!fs.existsSync(root)) return files;
-  const visit = (dir) => { for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (item.name === '.git' || item.name === 'node_modules') continue;
-    const file = path.join(dir, item.name);
-    if (item.isDirectory()) visit(file); else if (predicate(file)) files.push(file);
-  }};
-  visit(root); return files;
+    const files = [];
+    if (!fs.existsSync(root)) return files;
+    const visit = (dir) => {
+        for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (item.name === '.git' || item.name === 'node_modules') continue;
+            const file = path.join(dir, item.name);
+            if (item.isDirectory()) visit(file);
+            else if (predicate(file)) files.push(file);
+        }
+    };
+    visit(root);
+    return files;
 }
+
 export function loadConfig() {
-  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG, 'utf8')) }; }
-  catch (error) {
-    if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid config at ${CONFIG}: ${error.message}`);
-    return DEFAULTS;
-  }
+    try {
+        return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG, 'utf8')) };
+    } catch (error) {
+        // A missing file is the normal case (no config.json yet); anything else (bad JSON) is
+        // worth surfacing so a typo in config.json doesn't silently fall back to defaults forever.
+        if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid config at ${CONFIG}: ${error.message}`);
+        return DEFAULTS;
+    }
 }
-const openAIStyle = (url) => ({ request: (input, p) => [url, { Authorization: `Bearer ${p.key}` }, { model: p.model, input }], extract: (body) => body.data.map((row) => row.embedding) });
+
+// --- Embedding provider table ---
+// Adding a provider is a single entry here (URL/request/response shape included); nothing else
+// needs to change. The installer does not validate provider names, so this table is the one
+// place an unknown name gets caught (resolveProvider throws on first catalog build).
+const openAIStyle = (url) => ({
+    request: (input, p) => [url, { Authorization: `Bearer ${p.key}` }, { model: p.model, input }],
+    extract: (body) => body.data.map((row) => row.embedding),
+});
 const PROVIDERS = {
-  gemini: { keyEnv: 'GEMINI_API_KEY', model: 'text-embedding-004', batch: 100, request: (input, p) => [`https://generativelanguage.googleapis.com/v1beta/models/${p.model}:batchEmbedContents?key=${p.key}`, {}, { requests: input.map((text) => ({ model: `models/${p.model}`, content: { parts: [{ text }] } })) }], extract: (body) => body.embeddings.map((row) => row.values) },
-  voyage: { keyEnv: 'VOYAGE_API_KEY', model: 'voyage-3.5-lite', batch: 128, ...openAIStyle('https://api.voyageai.com/v1/embeddings') },
-  openai: { keyEnv: 'OPENAI_API_KEY', model: 'text-embedding-3-small', batch: 256, ...openAIStyle('https://api.openai.com/v1/embeddings') },
+    gemini: {
+        keyEnv: 'GEMINI_API_KEY', model: 'text-embedding-004', batch: 100,
+        request: (input, p) => [
+            `https://generativelanguage.googleapis.com/v1beta/models/${p.model}:batchEmbedContents?key=${p.key}`,
+            {},
+            { requests: input.map((text) => ({ model: `models/${p.model}`, content: { parts: [{ text }] } })) },
+        ],
+        extract: (body) => body.embeddings.map((row) => row.values),
+    },
+    voyage: { keyEnv: 'VOYAGE_API_KEY', model: 'voyage-3.5-lite', batch: 128, ...openAIStyle('https://api.voyageai.com/v1/embeddings') },
+    openai: { keyEnv: 'OPENAI_API_KEY', model: 'text-embedding-3-small', batch: 256, ...openAIStyle('https://api.openai.com/v1/embeddings') },
 };
+
+// Returns: null (vectors disabled) / {missingKey} (provider selected but key unset) /
+// {name,key,model,batch,request,extract} (ready to use).
 export function resolveProvider(config) {
-  const selection = config.vectors || {}; if (!selection.provider || selection.provider === 'none') return null;
-  const provider = PROVIDERS[selection.provider]; if (!provider) throw new Error(`Unknown vector provider: ${selection.provider}`);
-  const keyEnv = selection.apiKeyEnv || provider.keyEnv; const key = process.env[keyEnv];
-  return key ? { name: selection.provider, key, model: selection.model || provider.model, batch: provider.batch, request: provider.request, extract: provider.extract } : { name: selection.provider, missingKey: keyEnv };
+    const selection = config.vectors || {};
+    if (!selection.provider || selection.provider === 'none') return null;
+    const provider = PROVIDERS[selection.provider];
+    if (!provider) throw new Error(`Unknown vector provider: ${selection.provider} (supported: ${Object.keys(PROVIDERS).join('/')})`);
+    const keyEnv = selection.apiKeyEnv || provider.keyEnv;
+    const key = process.env[keyEnv];
+    if (!key) return { name: selection.provider, missingKey: keyEnv };
+    return { name: selection.provider, key, model: selection.model || provider.model, batch: provider.batch, request: provider.request, extract: provider.extract };
 }
-const normalize = (vector) => { const magnitude = Math.sqrt(vector.reduce((sum, n) => sum + n * n, 0)) || 1; return vector.map((n) => n / magnitude); };
-export async function embedTexts(texts, provider) {
-  const vectors = [];
-  for (let i = 0; i < texts.length; i += provider.batch) {
-    const [url, headers, body] = provider.request(texts.slice(i, i + provider.batch), provider);
-    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+async function post(url, headers, body) {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+    });
     if (!response.ok) throw new Error(`Embedding API HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    for (const vector of provider.extract(await response.json())) vectors.push(normalize(vector));
-  }
-  return vectors;
+    return response.json();
 }
-export function writeVectors(vectors, meta) { const dims = vectors[0]?.length || 0; const data = new Float32Array(vectors.length * dims); vectors.forEach((v, i) => data.set(v, i * dims)); writeAtomic(VEC_BIN, Buffer.from(data.buffer)); writeAtomic(VEC_META, JSON.stringify({ ...meta, dims, count: vectors.length })); }
-export function readVectors(count) {
-  try {
-    const meta = JSON.parse(fs.readFileSync(VEC_META, 'utf8'));
-    if (!meta.dims || meta.count !== count) return null;
-    const data = fs.readFileSync(VEC_BIN);
-    if (data.length !== meta.dims * meta.count * Float32Array.BYTES_PER_ELEMENT) return null;
-    return { meta, data: new Float32Array(data.buffer, data.byteOffset, data.length / 4) };
-  } catch { return null; }
+
+function normalize(vector) {
+    const magnitude = Math.sqrt(vector.reduce((sum, n) => sum + n * n, 0)) || 1;
+    return vector.map((n) => n / magnitude);
+}
+
+// texts -> normalized number[][]. Pre-normalizing means cosine similarity at query time is a
+// plain dot product (no per-query sqrt work over the whole catalog).
+export async function embedTexts(texts, provider) {
+    const vectors = [];
+    for (let i = 0; i < texts.length; i += provider.batch) {
+        const chunk = texts.slice(i, i + provider.batch);
+        const [url, headers, body] = provider.request(chunk, provider);
+        const response = await post(url, headers, body);
+        for (const vector of provider.extract(response)) vectors.push(normalize(vector));
+        if (texts.length > provider.batch) process.stderr.write(`embedded ${Math.min(i + provider.batch, texts.length)}/${texts.length}\n`);
+    }
+    return vectors;
+}
+
+export function writeVectors(vectors, meta) {
+    const dims = vectors[0] ? vectors[0].length : 0;
+    const data = new Float32Array(vectors.length * dims);
+    vectors.forEach((v, i) => data.set(v, i * dims));
+    writeAtomic(VEC_BIN, Buffer.from(data.buffer));
+    writeAtomic(VEC_META, JSON.stringify({ ...meta, dims, count: vectors.length }));
+}
+
+// expectedCount: current catalog row count. Checked against the stored count before touching the
+// (potentially large) .bin file, so a catalog rebuilt without a matching re-embed is detected
+// cheaply instead of silently reading vectors that no longer line up with catalog.jsonl rows.
+export function readVectors(expectedCount) {
+    try {
+        const meta = JSON.parse(fs.readFileSync(VEC_META, 'utf8'));
+        if (!meta.dims || (expectedCount != null && meta.count !== expectedCount)) return null;
+        const data = fs.readFileSync(VEC_BIN);
+        if (data.length !== meta.dims * meta.count * Float32Array.BYTES_PER_ELEMENT) return null;
+        return { meta, data: new Float32Array(data.buffer, data.byteOffset, data.length / 4) };
+    } catch { return null; }
 }
