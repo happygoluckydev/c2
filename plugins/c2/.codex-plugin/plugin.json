@@ -1,6 +1,6 @@
 {
   "name": "c2",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260722141155",
   "description": "A local catalog and recommender for Codex skills, plugins, and MCP servers.",
   "author": {
     "name": "happygoluckydev"
