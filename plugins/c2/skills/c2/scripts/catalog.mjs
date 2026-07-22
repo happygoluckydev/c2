@@ -68,15 +68,23 @@ export function walk(root, predicate) {
     return files;
 }
 
-export function loadConfig() {
+// Reads and JSON.parses `file`, returning null if missing or unparseable. A missing file
+// (ENOENT) is normal and silent; any other read/parse failure (corruption) is logged so it
+// doesn't fail silently forever. Consolidates what used to be independent try/catch blocks in
+// loadConfig, readVectors, and search.mjs's stale()/meta-trace reads — only loadConfig warned on
+// corruption before, so the same file corrupted elsewhere failed with zero diagnostic output.
+// (/code-review, ported from the equivalent c3 fix)
+export function readJsonSafe(file) {
     try {
-        return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG, 'utf8')) };
+        return JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch (error) {
-        // A missing file is the normal case (no config.json yet); anything else (bad JSON) is
-        // worth surfacing so a typo in config.json doesn't silently fall back to defaults forever.
-        if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid config at ${CONFIG}: ${error.message}`);
-        return DEFAULTS;
+        if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid JSON at ${file}: ${error.message}`);
+        return null;
     }
+}
+
+export function loadConfig() {
+    return { ...DEFAULTS, ...(readJsonSafe(CONFIG) || {}) };
 }
 
 // --- Embedding provider table ---
@@ -154,12 +162,19 @@ export function writeVectors(vectors, meta) {
 // expectedCount: current catalog row count. Checked against the stored count before touching the
 // (potentially large) .bin file, so a catalog rebuilt without a matching re-embed is detected
 // cheaply instead of silently reading vectors that no longer line up with catalog.jsonl rows.
+// The byte-length check uses fs.statSync (metadata only) before fs.readFileSync, so a corrupted
+// or truncated vectors.bin is rejected without paying for reading it into memory first.
+// (/code-review, ported from the equivalent c3 fix)
 export function readVectors(expectedCount) {
+    const meta = readJsonSafe(VEC_META);
+    if (!meta || !meta.dims || (expectedCount != null && meta.count !== expectedCount)) return null;
+    const expectedBytes = meta.dims * meta.count * Float32Array.BYTES_PER_ELEMENT;
     try {
-        const meta = JSON.parse(fs.readFileSync(VEC_META, 'utf8'));
-        if (!meta.dims || (expectedCount != null && meta.count !== expectedCount)) return null;
+        if (fs.statSync(VEC_BIN).size !== expectedBytes) return null;
         const data = fs.readFileSync(VEC_BIN);
-        if (data.length !== meta.dims * meta.count * Float32Array.BYTES_PER_ELEMENT) return null;
         return { meta, data: new Float32Array(data.buffer, data.byteOffset, data.length / 4) };
-    } catch { return null; }
+    } catch (error) {
+        if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid vectors file ${VEC_BIN}: ${error.message}`);
+        return null;
+    }
 }

@@ -27,11 +27,28 @@ const fetchText = (url) => fetchOk(url).then((response) => response.text());
 // command that a user may copy-paste and run. Restrict it to a safe segment charset before that
 // happens, the same guard c3 applies to the same source, so a poisoned upstream entry can't smuggle
 // shell metacharacters into a recommendation.
-const SAFE_CATALOG_PATH = /^[A-Za-z0-9][A-Za-z0-9_-]*(\/[A-Za-z0-9][A-Za-z0-9_-]*)*$/;
+// Segment charset includes "." (in addition to alnum/_/-) so legitimate versioned paths like
+// "tools/v1.2-migrate" aren't silently dropped from the catalog. (/code-review, ported from c3)
+const SAFE_CATALOG_PATH = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)*$/;
 function safeCatalogPath(value, source) {
     const candidate = String(value || '').trim();
     if (!SAFE_CATALOG_PATH.test(candidate)) {
         errors.push(`${source}: skipped unsafe path ${JSON.stringify(candidate).slice(0, 120)}`);
+        return null;
+    }
+    return candidate;
+}
+
+// safeCatalogPath is an allowlist shaped for aitmpl.com's path-like values; it's too strict for
+// free-form external values (URLs, package identifiers) from other sources that get interpolated
+// into install: strings the same way. This denylist variant rejects shell metacharacters/control
+// characters instead, so it fits VoltAgent README URLs and MCP registry fields. Applying it only to
+// aitmpl.com and leaving the other sources unguarded was a gap found in /code-review (ported from c3).
+const UNSAFE_INSTALL_CHARS = /[;&|`$()<>\n\r"'\\]/;
+function safeForInstallString(value, source) {
+    const candidate = String(value || '').trim();
+    if (!candidate || UNSAFE_INSTALL_CHARS.test(candidate)) {
+        errors.push(`${source}: skipped unsafe value ${JSON.stringify(candidate).slice(0, 120)}`);
         return null;
     }
     return candidate;
@@ -136,13 +153,17 @@ async function indexVoltAgentSkills() {
     const pattern = /^\s*-\s*\*\*\[([^\]]+)\]\(([^)]+)\)\*\*\s*[-–—]\s*(.+)$/gm;
     let match;
     while ((match = pattern.exec(text))) {
+        // match[2] is captured via [^)]+, so it can contain spaces, backticks, $(), semicolons,
+        // etc. Validate before it reaches an install: string a user might copy-paste and run.
+        const url = safeForInstallString(match[2], 'VoltAgent/awesome-agent-skills');
+        if (!url) continue;
         add({
             kind: 'skill',
             name: match[1].trim(),
             description: match[3].trim(),
             source: 'VoltAgent/awesome-agent-skills',
             tags: ['community'],
-            install: `Review ${match[2]} and adapt the skill for Codex before installation.`,
+            install: `Review ${url} and adapt the skill for Codex before installation.`,
         });
     }
 }
@@ -184,11 +205,15 @@ async function indexMcpRegistry() {
             const status = row._meta?.['io.modelcontextprotocol.registry/official']?.status;
             if (status && status !== 'active') continue;
             // Prefer a remote transport; fall back to an npm package; otherwise point at the registry.
+            // remote.url / packageInfo.identifier are external data too, so validate them before
+            // they land in an install: string, same as aitmpl.com's path. (/code-review, ported from c3)
             const remote = server.remotes?.[0];
             const packageInfo = server.packages?.[0];
             let install = 'Review the server in the MCP Registry before configuring it in Codex.';
-            if (remote?.url) install = `codex mcp add ${server.name} --url ${remote.url}`;
-            else if (packageInfo?.identifier) install = `codex mcp add ${server.name} -- npx -y ${packageInfo.identifier}`;
+            const remoteUrl = remote?.url && safeForInstallString(remote.url, 'mcp-registry');
+            const packageId = packageInfo && safeForInstallString(packageInfo.identifier || packageInfo.name || '', 'mcp-registry');
+            if (remoteUrl) install = `codex mcp add ${server.name} --url ${remoteUrl}`;
+            else if (packageId) install = `codex mcp add ${server.name} -- npx -y ${packageId}`;
             byName.set(server.name, { kind: 'mcp', name: server.name, description: server.description || '', source: 'MCP Registry', install });
         }
         cursor = result.metadata?.nextCursor;

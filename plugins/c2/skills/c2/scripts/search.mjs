@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CATALOG, META, embedTexts, loadConfig, readVectors, resolveProvider } from './catalog.mjs';
+import { CATALOG, META, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider } from './catalog.mjs';
 
 const BUILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-index.mjs');
 
@@ -51,8 +51,9 @@ if (!fs.existsSync(CATALOG)) {
     refresh.unref();
 }
 function stale() {
-    try { return Date.now() - Date.parse(JSON.parse(fs.readFileSync(META, 'utf8')).builtAt) > 7 * 24 * 60 * 60 * 1000; }
-    catch { return true; }
+    const meta = readJsonSafe(META);
+    if (!meta) return true;
+    return Date.now() - Date.parse(meta.builtAt) > 7 * 24 * 60 * 60 * 1000;
 }
 
 const docs = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
@@ -72,7 +73,14 @@ if (requested) {
 const STOP_WORDS = new Set(['a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'in', 'into', 'is', 'it', 'of', 'on', 'or', 'the', 'to', 'with']);
 // Token charset allows +.#/- (not just [a-z0-9]) so product names like "c++", "asp.net", or
 // "ci/cd" survive tokenization instead of being split into meaningless fragments.
-const tokenize = (text) => (String(text).toLowerCase().match(/[a-z0-9][a-z0-9+.#/-]*/g) || []).filter((token) => token.length > 1 && !STOP_WORDS.has(token));
+// Two fixes from /code-review (ported from the equivalent c3 fix):
+//  - no longer drops single-character tokens (a length>1 filter used to reject valid keywords
+//    like "r" for the R language, silently zeroing out the whole query);
+//  - strips a trailing period so a term at the end of a sentence in prose ("...on Stripe.")
+//    still tokenizes the same as the clean query term ("stripe").
+const tokenize = (text) => (String(text).toLowerCase().match(/[a-z0-9][a-z0-9+.#/-]*/g) || [])
+    .map((token) => token.replace(/\.+$/, ''))
+    .filter((token) => !STOP_WORDS.has(token));
 
 // Keyword-derived and task-derived tokens are kept distinguishable for the trace output below,
 // then combined for scoring.
@@ -129,14 +137,20 @@ if (vector) {
             for (let j = 0; j < vector.meta.dims; j += 1) score += vector.data[i * vector.meta.dims + j] * queryVector[j];
             return { i, score };
         }).sort((a, b) => b.score - a.score);
+        // matches lookup is built from the FULL scored array (before slicing to the top 100), so a
+        // doc that matched lexically outside the top 100 doesn't lose its matched_fields evidence
+        // just because RRF fusion only seeds from the top slice. (/code-review, ported from c3)
+        const matchesByDoc = new Map(scored.map((row) => [row.doc, row.matches]));
         // RRF: score = sum of 1/(60+rank) across ranking lists. 60 is the standard RRF constant.
+        // fused stays a plain score map (not a cloned row object per entry) — matches are merged
+        // back in once, below, instead of being spread into every fusion step.
         const fused = new Map();
-        scored.slice(0, 100).forEach((row, i) => fused.set(row.doc, { ...row, score: 1 / (60 + i) }));
+        scored.slice(0, 100).forEach((row, i) => fused.set(row.doc, 1 / (60 + i)));
         semantic.slice(0, 100).forEach((row, i) => {
-            const previous = fused.get(docs[row.i]) || { doc: docs[row.i], matches: [], score: 0 };
-            fused.set(docs[row.i], { ...previous, score: previous.score + 1 / (60 + i) });
+            fused.set(docs[row.i], (fused.get(docs[row.i]) || 0) + 1 / (60 + i));
         });
-        scored = [...fused.values()].sort((a, b) => b.score - a.score);
+        scored = [...fused.entries()].map(([doc, score]) => ({ doc, score, matches: matchesByDoc.get(doc) || [] }));
+        scored.sort((a, b) => b.score - a.score);
         mode += ` + vector RRF(${vector.meta.provider}/${vector.meta.model})`;
     } catch (error) { console.error(`Vector search failed; lexical results retained: ${error.message}`); }
 }
@@ -156,8 +170,7 @@ for (const row of scored) {
     byKind.get(row.doc.kind).push(row);
 }
 
-let meta = {};
-try { meta = JSON.parse(fs.readFileSync(META, 'utf8')); } catch { /* the current catalog is still usable without meta.json */ }
+const meta = readJsonSafe(META) || {};
 
 console.log(`# catalog: ${meta.builtAt || 'unknown'} (${meta.total || docs.length} entries)`);
 console.log(`# mode: ${mode}`);
