@@ -1,9 +1,11 @@
 ---
 name: c2
-description: Find existing Codex skills, plugins, and MCP servers before creating a workflow or integration. Use when the user asks what Codex capability can help with a task, or when reuse should be evaluated before implementation.
+description: Find existing Codex skills, plugins, and MCP servers before creating a workflow or integration. Use when the user asks what Codex capability can help with a task, when reuse should be evaluated before implementation, or whenever a request is literally prefixed with "/c2" — that prefix always triggers this workflow regardless of what the rest of the request looks like.
 ---
 
 # c2 — Codex Concierge
+
+Once triggered (see `description` above), run every step below mechanically — do not skip or reorder them just because the request reads like a normal implementation task (e.g. "/c2 add a demo gif to the README") rather than a capability question. This is a best-effort trigger: Codex has no hard slash-command dispatch, so the model's own judgment still decides whether `/c2` actually fires.
 
 Use c2 before proposing a new skill, plugin, MCP server, or integration. Search the local catalog first; do not use web research as a substitute for the catalog.
 
