@@ -2,14 +2,14 @@
 
 > **Don't reinvent the wheel.** The Codex ecosystem already ships skills, plugins, and MCP servers — including the ones already installed on your machine. The hard part isn't building your own — it's knowing what already exists. c2 checks *before* you build.
 
-**/c2** (or the short alias **/cc**) tells you the best combination of Codex **skills, plugins, and MCP servers** for whatever task you describe — using a **local catalog** so that each recommendation costs almost zero tokens.
+**/c2** (or the short alias **/cc**) tells you the best combination of Codex **skills, plugins, and MCP servers** for whatever task you describe — using a **local RAG catalog** so that each recommendation costs almost zero tokens.
 
 ```
 /c2 Find a Codex capability for GitHub PR review comments
 /cc Find a Codex capability for GitHub PR review comments
 ```
 
-→ Returns a prioritized recommendation table (what to reuse, what to add, what *not* to add) with ready-to-run install commands and a visible search trace.
+→ Returns a prioritized proposal table (what to reuse, what to add, what *not* to add) with ready-to-run install commands and a visible search trace.
 
 The plugin ships Codex command prompts in `plugins/c2/commands/`: `/c2` is the primary command, and `/cc` is an alias that runs the same workflow.
 
@@ -27,7 +27,7 @@ Command behavior is intentionally quiet and predictable:
 
 c2 is a Codex port of its Claude Code sibling [happygoluckydev/c3](https://github.com/happygoluckydev/c3): every time you're about to hand-roll a skill, plugin, or MCP integration, something in the ecosystem — or already sitting in `~/.codex/skills` and `~/.codex/plugins` — has probably solved it already. Reuse beats rebuild, which is why c2's recommendation policy literally starts with *"no addition needed — reuse what you already have."* The catalog indexes your own installed skills and plugins first.
 
-But checking the ecosystem by hand (or letting the model web-research it) costs real time and tokens per question. c2 splits the work:
+But checking the ecosystem by hand (or letting the model web-research it) costs real time and a lot of tokens per question. c2 splits the work:
 
 | Phase | Frequency | Cost |
 |---|---|---|
@@ -109,7 +109,7 @@ sequenceDiagram
     C->>C: pick up to three finalists by priority policy<br/>(existing capability > installed plugin > official skill/plugin > community skill > MCP)
     C->>S: node search.mjs --get "finalists"
     S-->>C: full JSON with install commands
-    C-->>U: localized recommendation table + rationale + safety notes
+    C-->>U: localized proposal table + rationale + safety notes
 ```
 
 ## Catalog sources
@@ -122,7 +122,7 @@ sequenceDiagram
 - [aitmpl.com](https://github.com/davila7/claude-code-templates) components catalog — community skill templates
 - [Official MCP Registry](https://registry.modelcontextprotocol.io) — active MCP servers
 
-Add sources by editing `plugins/c2/skills/c2/scripts/build-index.mjs` (one function per source).
+Source counts depend on the live upstream catalogs and the user's installed Codex environment. Add sources by editing `plugins/c2/skills/c2/scripts/build-index.mjs` (one function per source).
 
 Catalog builds a local search index on your machine. In default fulltext mode, that local `catalog.jsonl` can include names, tags, descriptions, and clipped body text from installed skills/plugins and selected public skill sources (up to 4,000 chars per entry); `"fulltext": false` skips body indexing. That does **not** re-license those upstream projects — each skill, plugin, or MCP server remains under its own license and terms. c2 points you at candidates; you still follow each project's license when you install or reuse it.
 
@@ -134,9 +134,9 @@ Catalog builds a local search index on your machine. In default fulltext mode, t
 git clone https://github.com/happygoluckydev/c2.git
 ```
 
-Add the cloned `plugins/c2` directory through the Codex Plugins workflow (or reference it from a personal `~/.agents/plugins/marketplace.json` entry), then start a new session so Codex can discover the `c2` skill and commands. Run `/c2 <task>` or `/cc <task>`.
+Add the cloned `plugins/c2` directory through the Codex Plugins workflow (or reference it from a personal `~/.agents/plugins/marketplace.json` entry). This makes the `c2` skill plus the `/c2` and `/cc` command prompts available. Start a new Codex session, then run `/c2 <task>` or `/cc <task>`.
 
-### Configuration
+### Install options
 
 The catalog defaults to fulltext lexical search with no external services. To change modes, create or edit `~/.codex/c2/config.json`:
 
@@ -171,11 +171,11 @@ On `/c2` or `/cc`, `search.mjs` builds the catalog synchronously if it is missin
 To refresh on a fixed schedule instead:
 
 ```sh
-sh plugins/c2/setup-schedule.sh      # macOS/Linux: weekly cron job
+sh plugins/c2/setup-schedule.sh      # macOS/Linux: weekly cron job (Mon 09:00)
 ```
 
 ```powershell
-./plugins/c2/setup-schedule.ps1      # Windows: weekly scheduled task
+./plugins/c2/setup-schedule.ps1      # Windows: weekly scheduled task (Mon 09:00)
 ```
 
 ## Recommendation policy
@@ -205,7 +205,7 @@ This never deletes skills, only moves them. Archiving is refused when no Codex s
 
 **「車輪の再発明をしたくない」から生まれたツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。
 
-クロールは HTTP のみ（LLM 不使用）。カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加し、新しいセッションで `/c2 <やりたいこと>` または `/cc <やりたいこと>` を実行してください。
+クロールは HTTP のみ（LLM 不使用）。ローカル RAG カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加します。これで `c2` スキルと `/c2`・`/cc` の command prompt が使えるようになります。新しいセッションで `/c2 <やりたいこと>` または `/cc <やりたいこと>` を実行してください。
 
 `/c2` と `/cc` はコマンド名を検索語から除外し、途中経過の説明を抑えて、可能な限りユーザーの言語で最終提案を返します。
 
