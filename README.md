@@ -22,6 +22,16 @@ c2 helps you reuse existing Codex capabilities before creating a new workflow or
 
 No model call is required to build or search the catalog. A stale catalog is served immediately and refreshed in the background.
 
+## License and third-party content
+
+The c2 source code is distributed under the MIT License. That license applies only to this repository's code and documentation; it does not grant rights to the skills, plugins, MCP servers, descriptions, or other content discovered through the catalog.
+
+External catalog entries are fetched directly from their respective sources at runtime and cached locally in `~/.codex/c2/`. They are not bundled in this Git repository. Each source, skill, plugin, and MCP server may have its own license, terms of use, attribution requirement, or commercial-use restriction. Review those terms before installing, copying, redistributing, or using an entry in production.
+
+By default, c2 indexes up to 4,000 characters of a skill body to improve search quality. If retention of third-party content is not appropriate for your environment, set `"fulltext": false` in the c2 configuration. This prevents skill bodies from being written to the local catalog, although c2 still downloads the relevant `SKILL.md` files to extract their metadata while building the catalog.
+
+Some source catalogs are indexes rather than licensors of their listed content. In particular, a list's license does not replace the license of each listed skill. Treat all community entries as discovery leads until their original source and license have been reviewed.
+
 ## Install
 
 This repository contains a local Codex plugin at `plugins/c2`. Add that directory through the Codex Plugins workflow, then start a new task so Codex can discover the `c2` skill.
@@ -79,8 +89,8 @@ Review community content before installation. Some catalog sources originated in
 
 ## Relationship to c3
 
-c2 adapts the architecture of [happygoluckydev/c3](https://github.com/happygoluckydev/c3) to Codex. Claude-specific agents and slash commands are represented by Codex skills and plugins; cataloging, retrieval, vector search, maintenance, and explanation features are provided in Codex-native form.
+c2 adapts the architecture of [happygoluckydev/c3](https://github.com/happygoluckydev/c3) to Codex. Claude-specific agents and slash commands are represented by Codex skills and plugins; cataloging, retrieval, vector search, maintenance, and explanation features are provided in Codex-native form. Distributions that include material derived from c3 must retain the applicable c3 MIT copyright and license notices.
 
 ## License
 
-MIT
+c2 is released under the [MIT License](LICENSE). Before publishing a derivative or redistributing third-party catalog content, preserve the required notices and verify the original content's license and terms.
