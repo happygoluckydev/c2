@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+# SPDX-License-Identifier: MIT
 set -e
 NODE="$(command -v node)"
 SCRIPT="$(cd "$(dirname "$0")" && pwd)/skills/c2/scripts/build-index.mjs"

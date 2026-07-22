@@ -1,58 +1,134 @@
 # c2 — Codex Concierge
 
-c2 helps you reuse existing Codex capabilities before creating a new workflow or integration. It searches a local catalog, then produces an auditable recommendation: what to reuse, what to add, what not to add, and why.
+> **Don't reinvent the wheel.** The Codex ecosystem already ships skills, plugins, and MCP servers — including the ones already installed on your machine. The hard part isn't building your own — it's knowing what already exists. c2 checks *before* you build.
 
-## What c2 does
+**/c2** tells you the best combination of Codex **skills, plugins, and MCP servers** for whatever task you describe — using a **local catalog** so that each recommendation costs almost zero tokens.
 
-- Indexes installed Codex skills, plugins, and skills bundled inside plugins
-- Collects the official OpenAI Skills catalog, compatible community-skill catalogs, and active MCP Registry servers
-- Searches with IDF-weighted lexical matching and full-text content by default
-- Optionally combines lexical results with Gemini, Voyage, or OpenAI embeddings through Reciprocal Rank Fusion (RRF)
-- Retrieves lightweight candidates with `--all`, then detailed records with `--get`
-- Makes its search trace visible: catalog age, search mode, query terms, per-kind hit counts, and matched fields
-- Refreshes stale catalogs automatically or on an optional weekly schedule
-- Audits unused user-installed skills and archives them safely instead of deleting them
+```
+/c2 Find a Codex capability for GitHub PR review comments
+```
+
+→ Returns a prioritized recommendation table (what to reuse, what to add, what *not* to add) with ready-to-run install commands and a visible search trace.
+
+## Demo
+
+![c2 skill usage demo](docs/assets/c2-demo.gif)
+
+## Why
+
+c2 is a Codex port of its Claude Code sibling [happygoluckydev/c3](https://github.com/happygoluckydev/c3): every time you're about to hand-roll a skill, plugin, or MCP integration, something in the ecosystem — or already sitting in `~/.codex/skills` and `~/.codex/plugins` — has probably solved it already. Reuse beats rebuild, which is why c2's recommendation policy literally starts with *"no addition needed — reuse what you already have."* The catalog indexes your own installed skills and plugins first.
+
+But checking the ecosystem by hand (or letting the model web-research it) costs real time and tokens per question. c2 splits the work:
+
+| Phase | Frequency | Cost |
+|---|---|---|
+| **Crawl** — build `~/.codex/c2/catalog.jsonl` from public sources | on first use; then when stale (>7 days), in the background | HTTP only, no LLM calls |
+| **Retrieve** — IDF-weighted keyword search over the catalog | every request | milliseconds, zero API cost |
+| **Propose** — Codex synthesizes the combination | every request | a few thousand tokens |
+
+Default path: no embedding API, no npm dependencies — Node.js standard library only. Optional vector search adds a REST embedding call (still no npm packages).
 
 ## How it works
 
-1. c2 builds a local JSONL catalog from installed capabilities and public sources.
-2. A keyword search returns a small, per-type shortlist with a visible trace.
-3. c2 fetches complete records only for the finalists.
-4. The c2 skill explains the recommendation, relevant exclusions, access implications, and the exact search trace.
+### Architecture
 
-No model call is required to build or search the catalog. A stale catalog is served immediately and refreshed in the background.
+```mermaid
+flowchart TB
+    subgraph sources["Catalog sources — crawled via HTTP only, no LLM"]
+        A1["~/.codex/skills<br/>installed skills"]
+        A2["~/.codex/plugins<br/>installed plugins + bundled skills"]
+        A3["~/.agents/plugins<br/>personal marketplace"]
+        B1["openai/skills<br/>official OpenAI skills"]
+        B2["anthropics/skills<br/>cross-ecosystem leads"]
+        B3["VoltAgent/awesome-agent-skills<br/>community skills"]
+        B4["aitmpl.com<br/>components.json"]
+        B5["MCP Registry<br/>v0/servers API"]
+    end
 
-## License and third-party content
+    CRON["optional weekly cron /<br/>Task Scheduler"] --> BUILD
+    BUILD["build-index.mjs<br/>parse + dedupe, installed first"]
+    EMB["embed.mjs — optional<br/>Gemini / Voyage / OpenAI via REST"]
 
-The c2 source code is distributed under the MIT License. That license applies only to this repository's code and documentation; it does not grant rights to the skills, plugins, MCP servers, descriptions, or other content discovered through the catalog.
+    subgraph store["~/.codex/c2/"]
+        CFG["config.json<br/>fulltext / vectors mode"]
+        CAT["catalog.jsonl"]
+        VEC["vectors.bin — optional<br/>L2-normalized float32"]
+        META["meta.json<br/>builtAt, counts"]
+    end
 
-External catalog entries are fetched directly from their respective sources at runtime and cached locally in `~/.codex/c2/`. They are not bundled in this Git repository. Each source, skill, plugin, and MCP server may have its own license, terms of use, attribution requirement, or commercial-use restriction. Review those terms before installing, copying, redistributing, or using an entry in production.
+    SEARCH["search.mjs<br/>IDF lexical + optional RRF hybrid"]
+    CODEX["Codex CLI<br/>/c2 skill"]
 
-By default, c2 indexes up to 4,000 characters of a skill body to improve search quality. If retention of third-party content is not appropriate for your environment, set `"fulltext": false` in the c2 configuration. This prevents skill bodies from being written to the local catalog, although c2 still downloads the relevant `SKILL.md` files to extract their metadata while building the catalog.
+    sources --> BUILD
+    CFG -.-> BUILD
+    CFG -.-> SEARCH
+    BUILD --> CAT
+    BUILD --> META
+    BUILD --> EMB --> VEC
+    CAT --> SEARCH
+    VEC --> SEARCH
+    CODEX -->|"--all / --get"| SEARCH
+    SEARCH --> CODEX
+```
 
-Some source catalogs are indexes rather than licensors of their listed content. In particular, a list's license does not replace the license of each listed skill. Treat all community entries as discovery leads until their original source and license have been reviewed.
+### Query flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Codex (/c2 skill)
+    participant S as search.mjs
+    participant B as build-index.mjs
+
+    U->>C: /c2 "task description"
+    C->>C: extract 3–6 English keywords
+    C->>S: node search.mjs --all "keywords" --task "原文"
+    S->>S: freshness check (meta.json)
+    alt catalog missing
+        S->>B: sync rebuild (HTTP only, no LLM)
+        B-->>S: fresh catalog
+    else catalog older than 7 days
+        S-->>S: serve current catalog
+        S->>B: rebuild in background
+    end
+    S->>S: IDF-weighted lexical scoring
+    opt vectors enabled and API key set
+        S->>S: embed query, cosine over vectors.bin, RRF fusion
+    end
+    S-->>C: compact TSV (per-kind caps: skill 6 / plugin 5 / mcp 5)
+    C->>C: pick up to three finalists by priority policy<br/>(existing capability > installed plugin > official skill/plugin > community skill > MCP)
+    C->>S: node search.mjs --get "finalists"
+    S-->>C: full JSON with install commands
+    C-->>U: recommendation table + rationale + safety notes
+```
+
+## Catalog sources
+
+- Your already-installed skills and plugins (`~/.codex/skills/`, `~/.codex/plugins/`) — reuse comes first
+- Your personal plugin marketplace (`~/.agents/plugins/marketplace.json`)
+- [openai/skills](https://github.com/openai/skills) — official OpenAI skills
+- [anthropics/skills](https://github.com/anthropics/skills) — cross-ecosystem discovery leads; Claude-specific entries are leads to review and adapt, not directly installable Codex plugins
+- [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills) — vendor and community skills
+- [aitmpl.com](https://github.com/davila7/claude-code-templates) components catalog — community skill templates
+- [Official MCP Registry](https://registry.modelcontextprotocol.io) — active MCP servers
+
+Add sources by editing `plugins/c2/skills/c2/scripts/build-index.mjs` (one function per source).
+
+Catalog builds a local search index on your machine. In default fulltext mode, that local `catalog.jsonl` can include names, tags, descriptions, and clipped body text from installed skills/plugins and selected public skill sources (up to 4,000 chars per entry); `"fulltext": false` skips body indexing. That does **not** re-license those upstream projects — each skill, plugin, or MCP server remains under its own license and terms. c2 points you at candidates; you still follow each project's license when you install or reuse it.
 
 ## Install
 
-This repository contains a local Codex plugin at `plugins/c2`. Add that directory through the Codex Plugins workflow, then start a new task so Codex can discover the `c2` skill.
+**Prerequisites**: [Node.js](https://nodejs.org/) (for catalog build/search) and the [Codex CLI](https://developers.openai.com/codex) with plugin support.
 
-## Search locally
-
-Run the scripts from the skill directory:
-
-```powershell
-Set-Location plugins/c2/skills/c2
-node scripts/search.mjs --all "github pull request review" --task "Review a GitHub pull request and address comments"
-node scripts/search.mjs --get "github,gh-address-comments"
+```sh
+git clone https://github.com/happygoluckydev/c2.git
 ```
 
-`--all` prints candidates and their search trace. `--get` returns installation and source details for the named finalists, without returning indexed skill bodies.
+Add the cloned `plugins/c2` directory through the Codex Plugins workflow (or reference it from a personal `~/.agents/plugins/marketplace.json` entry), then start a new session so Codex can discover the `c2` skill. Run `/c2 <task>`.
 
-The catalog is stored at `~/.codex/c2/` (or `%USERPROFILE%\.codex\c2\` on Windows), so plugin updates do not discard it. The default mode is full-text lexical search and requires no API key.
+### Configuration
 
-## Optional vector search
-
-Create `~/.codex/c2/config.json`:
+The catalog defaults to fulltext lexical search with no external services. To change modes, create or edit `~/.codex/c2/config.json`:
 
 ```json
 {
@@ -61,31 +137,67 @@ Create `~/.codex/c2/config.json`:
 }
 ```
 
-Supported providers are `openai`, `gemini`, and `voyage`. Set the corresponding API key (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `VOYAGE_API_KEY`) before rebuilding the catalog. When a configured key is absent or a vector request fails, c2 continues with lexical search.
+| Setting | Effect |
+|---|---|
+| `"fulltext": true` (default) | Lexical search including document bodies. Zero external services. |
+| `"fulltext": false` | Lite: skip body indexing — catalog roughly half the size, slightly lower recall. |
+| `"vectors": { "provider": "openai" \| "gemini" \| "voyage" }` | Hybrid search: lexical + embedding ranks fused with RRF. Needs `OPENAI_API_KEY` / `GEMINI_API_KEY` / `VOYAGE_API_KEY`. Embedding cost is small per full rebuild; queries are one embed call each. |
 
-Set `"fulltext": false` to reduce catalog size at the cost of recall.
+If the configured provider's API key is missing or a request fails, search falls back to lexical mode.
 
-## Refresh and skill audit
+#### Optional vector search: what leaves your machine
 
-Run `setup-schedule.ps1` on Windows or `setup-schedule.sh` on macOS/Linux to register a weekly catalog refresh.
+Default install is **local-only** (lexical / fulltext). With `vectors` enabled, the chosen provider receives:
 
-To audit user-installed skills, run:
+- **Catalog rebuild**: names, tags, and descriptions for embedding (not fulltext bodies)
+- **Each `/c2` query**: the search query string (keywords / task text) for one embed call
 
-```powershell
-node plugins/c2/skills/c2/scripts/prune.mjs
+API keys stay in your environment variables. Review the provider's terms and data policies before enabling. For confidential task text, keep the default lexical mode (no external embed calls).
+
+## Keeping the catalog fresh
+
+On `/c2`, `search.mjs` builds the catalog synchronously if it is missing. If it exists but is older than 7 days, the current catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM).
+
+To refresh on a fixed schedule instead:
+
+```sh
+sh plugins/c2/setup-schedule.sh      # macOS/Linux: weekly cron job
 ```
 
-This is a dry run. Add `--apply` to move unused skills to `~/.codex/skills-archive/`; no skills are deleted. Archiving is refused when no Codex session transcript is available, because usage cannot be determined safely.
+```powershell
+./plugins/c2/setup-schedule.ps1      # Windows: weekly scheduled task
+```
 
 ## Recommendation policy
 
-1. Reuse built-in and already installed capabilities.
-2. Prefer maintained, installed, or official Codex plugins.
-3. Prefer official skills for focused, repeatable work.
-4. Use a reviewed compatible community skill only when it fills a real gap.
-5. Recommend MCP only when live external data or actions are necessary.
+Proposals follow a strict priority order (see `plugins/c2/skills/c2/SKILL.md`):
 
-Review community content before installation. Some catalog sources originated in other agent ecosystems, so they are discovery leads rather than directly installable Codex plugins. MCP servers may access data or perform actions after authorization.
+1. **No addition needed** — existing Codex capabilities or already-installed skills/plugins win
+2. **Installed plugins** — maintained bundles already available in this Codex environment
+3. **Official skills/plugins** — procedural knowledge alone is enough; official sources preferred
+4. **Compatible community skills** — reviewed and adapted to fill a real gap
+5. **MCP servers** — only when external data or action is truly essential (they cost resident context)
+
+Community-made definition files can carry prompt-injection risks — c2 always reminds you to read them before installing.
+
+### Optional: prune unused skills
+
+If you want to inventory unused installed skills and estimate resident context cost:
+
+```sh
+node plugins/c2/skills/c2/scripts/prune.mjs           # dry-run report
+node plugins/c2/skills/c2/scripts/prune.mjs --apply    # archive unused to ~/.codex/skills-archive/
+```
+
+This never deletes skills, only moves them. Archiving is refused when no Codex session transcript is available, because usage cannot be determined safely.
+
+## 日本語
+
+**「車輪の再発明をしたくない」から生まれたツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。
+
+クロールは HTTP のみ（LLM 不使用）。カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加し、新しいセッションで `/c2 <やりたいこと>` を実行してください。
+
+MIT は **本リポジトリのコード／ドキュメントのみ**に適用されます。カタログが指す第三者のスキル・プラグイン・MCP は各プロジェクトのライセンス・利用条件に従ってください。既定のローカル検索では、`catalog.jsonl` に名前・タグ・説明文に加えてスキル本文の一部（最大 4,000 文字）が保存される場合があります。ベクトル検索を有効にした場合、外部 Embedding API に送信されるのは名前・タグ・説明文とクエリで、fulltext 本文は送信されません。機密タスクでは既定のローカル検索を推奨します。
 
 ## Relationship to c3
 
@@ -93,4 +205,10 @@ c2 adapts the architecture of [happygoluckydev/c3](https://github.com/happygoluc
 
 ## License
 
-c2 is released under the [MIT License](LICENSE). Before publishing a derivative or redistributing third-party catalog content, preserve the required notices and verify the original content's license and terms.
+[MIT License](./LICENSE) (`SPDX-License-Identifier: MIT`)
+
+Copyright holder: see [AUTHORS](./AUTHORS) (`Copyright (c) 2026 happygoluckydev` in `LICENSE`). Author: [happygoluckydev](https://x.com/happyg01uckydev).
+
+The MIT license covers **this repository's code and documentation only** — it does not grant rights to the skills, plugins, MCP servers, descriptions, or other content discovered through the catalog. Catalog entries are fetched directly from their respective sources at runtime and cached locally in `~/.codex/c2/`; they are not bundled in this Git repository. Each source, skill, plugin, and MCP server may have its own license, terms of use, attribution requirement, or commercial-use restriction — review those terms before installing, copying, redistributing, or using an entry in production. Some source catalogs are indexes rather than licensors of their listed content: a list's license does not replace the license of each listed skill, so treat all community entries as discovery leads until their original source and license have been reviewed.
+
+Adding `plugins/c2` as a Codex plugin carries the notice with it via `plugins/c2/LICENSE`. Major scripts (`build-index.mjs`, `catalog.mjs`, `prune.mjs`, `search.mjs`, `setup-schedule.sh`, `setup-schedule.ps1`) carry an `SPDX-License-Identifier: MIT` header for machine-readable reuse.

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "A local catalog and recommender for Codex skills, plugins, and MCP servers.",
   "author": {
-    "name": "Local developer"
+    "name": "happygoluckydev"
   },
   "skills": "./skills/",
   "interface": {

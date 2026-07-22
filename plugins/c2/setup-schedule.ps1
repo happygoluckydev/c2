@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Registers a weekly local catalog refresh. Run manually after installing the plugin.
 $node = (Get-Command node).Source
 $script = Join-Path $PSScriptRoot 'skills\c2\scripts\build-index.mjs'

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: MIT
 // Audit user-installed Codex skills. --apply moves unused skills to an archive; it never deletes them.
 import fs from 'node:fs';
 import os from 'node:os';
