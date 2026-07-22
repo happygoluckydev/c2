@@ -1,0 +1,20 @@
+{
+  "name": "c2-github",
+  "interface": {
+    "displayName": "C2 GitHub"
+  },
+  "plugins": [
+    {
+      "name": "c2",
+      "source": {
+        "source": "local",
+        "path": "./plugins/c2"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
