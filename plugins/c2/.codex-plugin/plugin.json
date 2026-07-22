@@ -1,0 +1,18 @@
+{
+  "name": "c2",
+  "version": "0.1.0",
+  "description": "A local catalog and recommender for Codex skills, plugins, and MCP servers.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "C2",
+    "shortDescription": "Find reusable Codex capabilities before building.",
+    "longDescription": "C2 searches a local catalog of installed Codex skills and plugins, the official OpenAI skills catalog, and MCP Registry servers before recommending additions.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use C2 to find the best existing Codex skills, plugins, or MCP servers for my task."
+  }
+}
