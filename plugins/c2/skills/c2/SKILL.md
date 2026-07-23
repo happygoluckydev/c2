@@ -87,10 +87,11 @@ recommendation.
 
 ## Execution trace
 
-Transcribe the search script's leading `#` lines verbatim — catalog age, search mode, the exact
-keyword and task tokens used, and per-kind hit counts — plus the names fetched with `--get`. Do
-not summarize or paraphrase these lines; the point is to ground the recommendation in real script
-output instead of a self-report. If the catalog search was skipped entirely, say so here and why.
+Transcribe the search script's leading `#` lines from `--all` verbatim, including its execution
+time, catalog schema/version, search mode, exact keyword/task tokens, and per-kind counts. The
+`--get` invocation emits its own `# trace: get` lines to stderr; transcribe its `# get:` line
+verbatim when available. Never invent a `# get:` line or reuse a trace from an earlier run. If the
+catalog search was skipped entirely, say so here and why.
 ```
 
 ## Maintenance

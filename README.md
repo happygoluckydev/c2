@@ -62,7 +62,7 @@ flowchart TB
         CFG["config.json<br/>fulltext / vectors mode"]
         CAT["catalog.jsonl"]
         VEC["vectors.bin — optional<br/>L2-normalized float32"]
-        META["meta.json<br/>builtAt, counts"]
+        META["meta.json<br/>schemaVersion, builtAt, counts"]
     end
 
     SEARCH["search.mjs<br/>IDF lexical + optional RRF hybrid"]
@@ -125,6 +125,27 @@ sequenceDiagram
 Source counts depend on the live upstream catalogs and the user's installed Codex environment. Add sources by editing `plugins/c2/skills/c2/scripts/build-index.mjs` (one function per source).
 
 Catalog builds a local search index on your machine. In default fulltext mode, that local `catalog.jsonl` can include names, tags, descriptions, and clipped body text from installed skills/plugins and selected public skill sources (up to 4,000 chars per entry); `"fulltext": false` skips body indexing. That does **not** re-license those upstream projects — each skill, plugin, or MCP server remains under its own license and terms. c2 points you at candidates; you still follow each project's license when you install or reuse it.
+
+### Entry metadata and audit trace
+
+Every catalog entry uses schema version 2 and includes provenance and safety fields in addition
+to its searchable name, tags, and description:
+
+| Field | Purpose |
+|---|---|
+| `sourceClass` | `official`, `community`, or `unknown` publisher provenance |
+| `license` | SPDX identifier when the source provides one; otherwise `unknown` |
+| `maturity` | `stable`, `experimental`, `deprecated`, or `unknown` |
+| `distribution` | `built-in`, `installed`, `installable`, `copy-and-adapt`, or `unknown` |
+| `surface` | One or more applicable surfaces, or `unknown` when the source cannot establish them |
+| `parentPlugin` | Owning plugin name for a bundled component; otherwise `null` |
+| `permissions` | Declared access classes when known; otherwise `unknown` |
+
+Unknown values are intentional: c2 does not infer a license, safety boundary, or maturity level
+from a repository name or a marketplace listing. `search.mjs --all` emits a machine-generated
+trace with the execution time, catalog schema, catalog build time, query tokens, and result counts.
+`--get` emits a separate trace on stderr with the requested and matched records, so a response
+never needs to invent a `# get:` line.
 
 ## Install
 

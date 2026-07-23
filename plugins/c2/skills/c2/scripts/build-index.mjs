@@ -7,13 +7,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CATALOG, CODEX_HOME, DATA_DIR, META, clipped, embedTexts, loadConfig, parseFrontmatter, resolveProvider, walk, writeAtomic, writeVectors } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, CODEX_HOME, DATA_DIR, META, clipped, embedTexts, loadConfig, parseFrontmatter, resolveProvider, walk, withCatalogMetadata, writeAtomic, writeVectors } from './catalog.mjs';
 
 const config = loadConfig();
 const errors = [];
 const entries = [];
 const home = os.homedir();
-const add = (entry) => entries.push({ tags: [], ...entry });
+const add = (entry) => entries.push(withCatalogMetadata({ tags: [], ...entry }));
 
 const fetchOk = async (url) => {
     const response = await fetch(url, { headers: { 'User-Agent': 'c2-codex-concierge' } });
@@ -57,6 +57,22 @@ function safeForInstallString(value, source) {
 // --- Source: skills already installed in this Codex environment ---
 // Indexed first (and unconditionally, before any network source) so "you already have this" is
 // always available to the reuse-first recommendation policy.
+function pluginNameFor(file, root) {
+    let directory = path.dirname(file);
+    const boundary = path.resolve(root);
+    while (directory.startsWith(boundary)) {
+        const manifest = path.join(directory, '.codex-plugin', 'plugin.json');
+        if (fs.existsSync(manifest)) {
+            try { return JSON.parse(fs.readFileSync(manifest, 'utf8')).name || path.basename(directory); }
+            catch (error) { errors.push(`plugin:${manifest}: ${error.message}`); return null; }
+        }
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+    }
+    return null;
+}
+
 function indexSkills(root, source) {
     for (const file of walk(root, (candidate) => path.basename(candidate) === 'SKILL.md')) {
         try {
@@ -68,6 +84,9 @@ function indexSkills(root, source) {
                 source,
                 install: 'Already available in this Codex environment.',
                 fulltext: clipped(fm.body),
+                distribution: 'installed',
+                surface: ['cli', 'ide', 'desktop'],
+                parentPlugin: pluginNameFor(file, root),
             });
         } catch (error) { errors.push(`skill:${file}: ${error.message}`); }
     }
@@ -86,6 +105,9 @@ function indexPlugins(root, source) {
                 source,
                 tags: manifest.interface?.capabilities || [],
                 install: 'Already available in this Codex environment.',
+                license: manifest.license || 'unknown',
+                distribution: 'installed',
+                surface: ['cli', 'desktop'],
             });
         } catch (error) { errors.push(`plugin:${file}: ${error.message}`); }
     }
@@ -106,6 +128,8 @@ function indexMarketplace() {
                 source: `marketplace:${marketplace.name || 'personal'}`,
                 tags: [plugin.category].filter(Boolean),
                 install: 'Install or enable it from the Codex Plugins view.',
+                distribution: 'installable',
+                surface: ['cli', 'desktop'],
             });
         }
     } catch (error) { errors.push(`marketplace: ${error.message}`); }
@@ -128,6 +152,8 @@ async function indexRepoSkills(repo, ref, source, install) {
             tags: source === 'openai/skills' ? ['official'] : ['community'],
             install: install(file),
             fulltext: clipped(fm.body),
+            distribution: source === 'openai/skills' ? 'installable' : 'copy-and-adapt',
+            surface: ['cli', 'ide', 'desktop'],
         };
     }));
     records.forEach((record, index) => {
@@ -164,6 +190,8 @@ async function indexVoltAgentSkills() {
             source: 'VoltAgent/awesome-agent-skills',
             tags: ['community'],
             install: `Review ${url} and adapt the skill for Codex before installation.`,
+            distribution: 'copy-and-adapt',
+            surface: ['unknown'],
         });
     }
 }
@@ -183,6 +211,8 @@ async function indexTemplates() {
             source: 'aitmpl.com',
             tags: [skill.category, ...(Array.isArray(skill.keywords) ? skill.keywords : [])].filter(Boolean).slice(0, 12),
             install: 'Community template: review and adapt it for Codex before installation.',
+            distribution: 'copy-and-adapt',
+            surface: ['unknown'],
         });
     }
 }
@@ -214,7 +244,13 @@ async function indexMcpRegistry() {
             const packageId = packageInfo && safeForInstallString(packageInfo.identifier || packageInfo.name || '', 'mcp-registry');
             if (remoteUrl) install = `codex mcp add ${server.name} --url ${remoteUrl}`;
             else if (packageId) install = `codex mcp add ${server.name} -- npx -y ${packageId}`;
-            byName.set(server.name, { kind: 'mcp', name: server.name, description: server.description || '', source: 'MCP Registry', install });
+            byName.set(server.name, {
+                kind: 'mcp', name: server.name, description: server.description || '', source: 'MCP Registry', install,
+                // `status` is the registry record lifecycle, not publisher verification. Keep
+                // provenance unknown unless a dedicated verified-publisher field is available.
+                sourceClass: 'unknown',
+                distribution: 'installable', surface: ['cli', 'ide', 'desktop'],
+            });
         }
         cursor = result.metadata?.nextCursor;
         if (!cursor) break;
@@ -276,6 +312,6 @@ if (provider?.missingKey) {
 }
 
 const counts = Object.fromEntries(['skill', 'plugin', 'mcp'].map((kind) => [kind, unique.filter((entry) => entry.kind === kind).length]));
-const meta = { builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, errors };
+const meta = { schemaVersion: CATALOG_SCHEMA_VERSION, builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, errors };
 fs.writeFileSync(META, JSON.stringify(meta, null, 2));
 console.log(JSON.stringify(meta, null, 2));

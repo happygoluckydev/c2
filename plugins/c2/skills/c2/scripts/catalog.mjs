@@ -16,6 +16,7 @@ export const CATALOG = path.join(DATA_DIR, 'catalog.jsonl');
 export const META = path.join(DATA_DIR, 'meta.json');
 export const VEC_BIN = path.join(DATA_DIR, 'vectors.bin');
 export const VEC_META = path.join(DATA_DIR, 'vectors.json');
+export const CATALOG_SCHEMA_VERSION = 2;
 const CONFIG = path.join(DATA_DIR, 'config.json');
 
 // Defaults when config.json is absent = historical behavior (index body text, no vectors).
@@ -42,6 +43,37 @@ export function parseFrontmatter(text) {
 // First 4000 characters only: keeps the catalog from bloating while still capturing the
 // vocabulary-dense opening of most SKILL.md / plugin docs, so recall barely suffers.
 export const clipped = (text = '') => text.replace(/\0/g, '').slice(0, 4000);
+
+// Provenance and installation state are separate: `distribution` records whether something is
+// installed, while `sourceClass` says who published it. Unknown is explicit because a public
+// repository, marketplace listing, or registry record is not proof of a publisher's identity.
+const SOURCE_CLASSES = new Set(['official', 'community', 'unknown']);
+const MATURITY_LEVELS = new Set(['stable', 'experimental', 'deprecated', 'unknown']);
+const DISTRIBUTIONS = new Set(['built-in', 'installed', 'installable', 'copy-and-adapt', 'unknown']);
+const list = (value, fallback) => {
+    const items = (Array.isArray(value) ? value : value ? [value] : []).map((item) => String(item).trim()).filter(Boolean);
+    return items.length ? [...new Set(items)] : fallback;
+};
+
+export function inferSourceClass(source = '') {
+    if (source === 'openai/skills') return 'official';
+    if (['anthropics/skills', 'VoltAgent/awesome-agent-skills', 'aitmpl.com'].includes(source)) return 'community';
+    return 'unknown';
+}
+
+export function withCatalogMetadata(entry) {
+    const sourceClass = SOURCE_CLASSES.has(entry.sourceClass) ? entry.sourceClass : inferSourceClass(entry.source);
+    return {
+        ...entry,
+        sourceClass,
+        license: String(entry.license || 'unknown').trim() || 'unknown',
+        maturity: MATURITY_LEVELS.has(entry.maturity) ? entry.maturity : 'unknown',
+        distribution: DISTRIBUTIONS.has(entry.distribution) ? entry.distribution : 'unknown',
+        surface: list(entry.surface, ['unknown']),
+        parentPlugin: entry.parentPlugin || null,
+        permissions: list(entry.permissions, ['unknown']),
+    };
+}
 
 // Write-then-rename so a crash mid-write can never leave catalog.jsonl / meta.json truncated
 // or corrupted for the next search.mjs invocation.

@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CATALOG, META, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, META, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider, withCatalogMetadata } from './catalog.mjs';
 
 const BUILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-index.mjs');
 
@@ -53,11 +53,12 @@ if (!fs.existsSync(CATALOG)) {
 function stale() {
     const meta = readJsonSafe(META);
     if (!meta) return true;
+    if (meta.schemaVersion !== CATALOG_SCHEMA_VERSION) return true;
     return Date.now() - Date.parse(meta.builtAt) > 7 * 24 * 60 * 60 * 1000;
 }
 
 const docs = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
-    try { return [JSON.parse(line)]; } catch { return []; }
+    try { return [withCatalogMetadata(JSON.parse(line))]; } catch { return []; }
 });
 
 // --- --get: exact-name lookup for the finalists only ---
@@ -65,6 +66,11 @@ if (requested) {
     const names = new Set(requested.split(',').map((name) => name.trim().toLowerCase()));
     // fulltext is search-only vocabulary; stripping it here keeps --get's output small.
     const matches = docs.filter((doc) => names.has((doc.name || '').toLowerCase())).map(({ fulltext, ...doc }) => doc);
+    const meta = readJsonSafe(META) || {};
+    console.error('# trace: get');
+    console.error(`# executedAt: ${new Date().toISOString()}`);
+    console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
+    console.error(`# get: requested[${[...names].join(',')}] matched[${matches.map((doc) => `${doc.kind}:${doc.name}`).join(',')}]`);
     console.log(JSON.stringify(matches, null, 2));
     process.exit(0);
 }
@@ -171,11 +177,14 @@ for (const row of scored) {
 }
 
 const meta = readJsonSafe(META) || {};
+const executedAt = new Date().toISOString();
 
-console.log(`# catalog: ${meta.builtAt || 'unknown'} (${meta.total || docs.length} entries)`);
+console.log('# trace: search');
+console.log(`# executedAt: ${executedAt}`);
+console.log(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
 console.log(`# mode: ${mode}`);
 console.log(`# query: keywords[${keywordTokens.join(' ')}]${taskTokens.length ? ` + task[${taskTokens.join(' ')}]` : ''}`);
-console.log(`# hits: ${Object.keys(caps).map((kind) => `${kind} ${(byKind.get(kind) || []).length} → ${Math.min(caps[kind], (byKind.get(kind) || []).length)}`).join(' / ')}`);
+console.log(`# hits: ${Object.keys(caps).map((kind) => `${kind} matched=${(byKind.get(kind) || []).length} returned=${Math.min(caps[kind], (byKind.get(kind) || []).length)}`).join(' / ')}`);
 console.log('kind\tname\tsource\tmatched_fields\tdescription');
 for (const kind of Object.keys(caps)) {
     for (const row of (byKind.get(kind) || []).slice(0, caps[kind])) {
