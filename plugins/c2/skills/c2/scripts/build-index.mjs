@@ -77,6 +77,7 @@ function indexSkills(root, source) {
     for (const file of walk(root, (candidate) => path.basename(candidate) === 'SKILL.md')) {
         try {
             const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
+            const parentPlugin = pluginNameFor(file, root);
             add({
                 kind: 'skill',
                 name: fm.name || path.basename(path.dirname(file)),
@@ -84,9 +85,11 @@ function indexSkills(root, source) {
                 source,
                 install: 'Already available in this Codex environment.',
                 fulltext: clipped(fm.body),
-                distribution: 'installed',
+                availability: 'installed',
+                packaging: parentPlugin ? 'plugin-component' : 'standalone',
+                execution: 'prompt',
                 surface: ['cli', 'ide', 'desktop'],
-                parentPlugin: pluginNameFor(file, root),
+                parentPlugin,
             });
         } catch (error) { errors.push(`skill:${file}: ${error.message}`); }
     }
@@ -106,7 +109,8 @@ function indexPlugins(root, source) {
                 tags: manifest.interface?.capabilities || [],
                 install: 'Already available in this Codex environment.',
                 license: manifest.license || 'unknown',
-                distribution: 'installed',
+                availability: 'installed',
+                packaging: 'plugin',
                 surface: ['cli', 'desktop'],
             });
         } catch (error) { errors.push(`plugin:${file}: ${error.message}`); }
@@ -128,7 +132,8 @@ function indexMarketplace() {
                 source: `marketplace:${marketplace.name || 'personal'}`,
                 tags: [plugin.category].filter(Boolean),
                 install: 'Install or enable it from the Codex Plugins view.',
-                distribution: 'installable',
+                availability: 'installable',
+                packaging: 'plugin',
                 surface: ['cli', 'desktop'],
             });
         }
@@ -152,7 +157,9 @@ async function indexRepoSkills(repo, ref, source, install) {
             tags: source === 'openai/skills' ? ['official'] : ['community'],
             install: install(file),
             fulltext: clipped(fm.body),
-            distribution: source === 'openai/skills' ? 'installable' : 'copy-and-adapt',
+            availability: source === 'openai/skills' ? 'installable' : 'copy-and-adapt',
+            packaging: 'standalone',
+            execution: 'prompt',
             surface: ['cli', 'ide', 'desktop'],
         };
     }));
@@ -190,7 +197,9 @@ async function indexVoltAgentSkills() {
             source: 'VoltAgent/awesome-agent-skills',
             tags: ['community'],
             install: `Review ${url} and adapt the skill for Codex before installation.`,
-            distribution: 'copy-and-adapt',
+            availability: 'copy-and-adapt',
+            packaging: 'standalone',
+            execution: 'prompt',
             surface: ['unknown'],
         });
     }
@@ -211,7 +220,9 @@ async function indexTemplates() {
             source: 'aitmpl.com',
             tags: [skill.category, ...(Array.isArray(skill.keywords) ? skill.keywords : [])].filter(Boolean).slice(0, 12),
             install: 'Community template: review and adapt it for Codex before installation.',
-            distribution: 'copy-and-adapt',
+            availability: 'copy-and-adapt',
+            packaging: 'standalone',
+            execution: 'prompt',
             surface: ['unknown'],
         });
     }
@@ -237,19 +248,22 @@ async function indexMcpRegistry() {
             // Prefer a remote transport; fall back to an npm package; otherwise point at the registry.
             // remote.url / packageInfo.identifier are external data too, so validate them before
             // they land in an install: string, same as aitmpl.com's path. (/code-review, ported from c3)
+            // Registry server names are display-only: never interpolate them into install commands
+            // (c3 uses a placeholder for the same reason).
             const remote = server.remotes?.[0];
             const packageInfo = server.packages?.[0];
             let install = 'Review the server in the MCP Registry before configuring it in Codex.';
             const remoteUrl = remote?.url && safeForInstallString(remote.url, 'mcp-registry');
             const packageId = packageInfo && safeForInstallString(packageInfo.identifier || packageInfo.name || '', 'mcp-registry');
-            if (remoteUrl) install = `codex mcp add ${server.name} --url ${remoteUrl}`;
-            else if (packageId) install = `codex mcp add ${server.name} -- npx -y ${packageId}`;
+            if (remoteUrl) install = `codex mcp add <name> --url ${remoteUrl}`;
+            else if (packageId) install = `codex mcp add <name> -- npx -y ${packageId}`;
             byName.set(server.name, {
                 kind: 'mcp', name: server.name, description: server.description || '', source: 'MCP Registry', install,
                 // `status` is the registry record lifecycle, not publisher verification. Keep
                 // provenance unknown unless a dedicated verified-publisher field is available.
                 sourceClass: 'unknown',
-                distribution: 'installable', surface: ['cli', 'ide', 'desktop'],
+                availability: 'installable', packaging: 'standalone', execution: 'external-service',
+                surface: ['cli', 'ide', 'desktop'],
             });
         }
         cursor = result.metadata?.nextCursor;
@@ -288,7 +302,7 @@ const unique = entries.filter((entry) => {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-});
+}).map((entry) => ({ ...entry, id: `${entry.kind}:${entry.name}` }));
 
 // Lite install (--no-fulltext): drop body vocabulary to roughly halve the catalog's on-disk size.
 if (config.fulltext === false) for (const entry of unique) delete entry.fulltext;

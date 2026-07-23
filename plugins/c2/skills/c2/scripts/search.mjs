@@ -10,7 +10,7 @@
 //
 // Usage:
 //   node search.mjs --all "<english keywords>" [--task "<original task text>"]
-//   node search.mjs --get "<name1,name2,...>"
+//   node search.mjs --get "<kind:name1,kind:name2,...>"
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -61,16 +61,36 @@ const docs = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean).flatMa
     try { return [withCatalogMetadata(JSON.parse(line))]; } catch { return []; }
 });
 
-// --- --get: exact-name lookup for the finalists only ---
+// --- --get: stable-ID lookup for the finalists only ---
 if (requested) {
-    const names = new Set(requested.split(',').map((name) => name.trim().toLowerCase()));
+    const values = [...new Set(requested.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean))];
+    const recordId = (doc) => String(doc.id || `${doc.kind}:${doc.name}`).toLowerCase();
+    const byId = new Map(docs.map((doc) => [recordId(doc), doc]));
+    const byName = new Map();
+    for (const doc of docs) {
+        const name = String(doc.name || '').toLowerCase();
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name).push(doc);
+    }
+    const selected = new Set();
+    for (const value of values) {
+        if (byId.has(value)) {
+            selected.add(byId.get(value));
+            continue;
+        }
+        const matches = byName.get(value) || [];
+        if (matches.length === 1) selected.add(matches[0]);
+        else if (matches.length > 1) {
+            console.error(`Ambiguous name ${value}: ${matches.map(recordId).join(', ')}. Pass a kind:name ID to --get.`);
+        }
+    }
     // fulltext is search-only vocabulary; stripping it here keeps --get's output small.
-    const matches = docs.filter((doc) => names.has((doc.name || '').toLowerCase())).map(({ fulltext, ...doc }) => doc);
+    const matches = docs.filter((doc) => selected.has(doc)).map(({ fulltext, ...doc }) => doc);
     const meta = readJsonSafe(META) || {};
     console.error('# trace: get');
     console.error(`# executedAt: ${new Date().toISOString()}`);
     console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
-    console.error(`# get: requested[${[...names].join(',')}] matched[${matches.map((doc) => `${doc.kind}:${doc.name}`).join(',')}]`);
+    console.error(`# get: requested[${values.join(',')}] matched[${matches.map(recordId).join(',')}]`);
     console.log(JSON.stringify(matches, null, 2));
     process.exit(0);
 }
@@ -185,9 +205,9 @@ console.log(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt
 console.log(`# mode: ${mode}`);
 console.log(`# query: keywords[${keywordTokens.join(' ')}]${taskTokens.length ? ` + task[${taskTokens.join(' ')}]` : ''}`);
 console.log(`# hits: ${Object.keys(caps).map((kind) => `${kind} matched=${(byKind.get(kind) || []).length} returned=${Math.min(caps[kind], (byKind.get(kind) || []).length)}`).join(' / ')}`);
-console.log('kind\tname\tsource\tmatched_fields\tdescription');
+console.log('id\tkind\tname\tsource\tmatched_fields\tdescription');
 for (const kind of Object.keys(caps)) {
     for (const row of (byKind.get(kind) || []).slice(0, caps[kind])) {
-        console.log(`${row.doc.kind}\t${row.doc.name}\t${row.doc.source}\t${row.matches.join(',')}\t${(row.doc.description || '').replace(/[\t\n]/g, ' ').slice(0, 110)}`);
+        console.log(`${row.doc.id || `${row.doc.kind}:${row.doc.name}`}\t${row.doc.kind}\t${row.doc.name}\t${row.doc.source}\t${row.matches.join(',')}\t${(row.doc.description || '').replace(/[\t\n]/g, ' ').slice(0, 110)}`);
     }
 }

@@ -41,10 +41,11 @@ Use c2 before proposing a new skill, plugin, MCP server, or integration. Search 
 
    Resident-cost ordering also applies when candidates differ in *form*, not just priority tier: a skill (read only when invoked) costs less standing context than a plugin (multiple bundled assets kept resident) or an MCP server (tool schemas kept resident every session). When two options fill the same role equally well, prefer the cheaper form. Do not add anything for a one-off task — recommend applying it manually in this conversation instead; installation is only worth it for capabilities that will be reused.
 
-4. Select no more than three finalists and retrieve only their full records:
+4. Select no more than three finalists and retrieve only their full records. Copy the `id`
+   column (`kind:name`) exactly so same-named capabilities of different kinds cannot be mixed up:
 
    ```sh
-   node <c2-skill-dir>/scripts/search.mjs --get "<name1,name2,...>"
+   node <c2-skill-dir>/scripts/search.mjs --get "<kind:name1,kind:name2,...>"
    ```
 
 5. Do not install, authorize, or enable a result unless the user explicitly requests it.

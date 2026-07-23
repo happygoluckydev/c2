@@ -105,9 +105,9 @@ sequenceDiagram
     opt vectors enabled and API key set
         S->>S: embed query, cosine over vectors.bin, RRF fusion
     end
-    S-->>C: compact TSV (per-kind caps: skill 6 / plugin 5 / mcp 5)
+    S-->>C: compact TSV with stable kind:name IDs (per-kind caps: skill 6 / plugin 5 / mcp 5)
     C->>C: pick up to three finalists by priority policy<br/>(existing capability > installed plugin > official skill/plugin > community skill > MCP)
-    C->>S: node search.mjs --get "finalists"
+    C->>S: node search.mjs --get "kind:name IDs"
     S-->>C: full JSON with install commands
     C-->>U: localized proposal table + rationale + safety notes
 ```
@@ -151,6 +151,9 @@ Publisher provenance and installation state are separate. For example, an instal
 uses `distribution: "installed"`, while `sourceClass` remains `official`, `community`, or
 `unknown`. MCP Registry lifecycle values such as `active` are not publisher verification, so
 registry entries remain `sourceClass: "unknown"` unless a dedicated verification signal exists.
+
+`--all` returns a stable `id` column in `kind:name` form. Pass those IDs to `--get`; a bare name is
+accepted only when it identifies exactly one catalog record.
 
 ## Install
 

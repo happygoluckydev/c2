@@ -16,7 +16,7 @@ export const CATALOG = path.join(DATA_DIR, 'catalog.jsonl');
 export const META = path.join(DATA_DIR, 'meta.json');
 export const VEC_BIN = path.join(DATA_DIR, 'vectors.bin');
 export const VEC_META = path.join(DATA_DIR, 'vectors.json');
-export const CATALOG_SCHEMA_VERSION = 2;
+export const CATALOG_SCHEMA_VERSION = 3;
 const CONFIG = path.join(DATA_DIR, 'config.json');
 
 // Defaults when config.json is absent = historical behavior (index body text, no vectors).
@@ -44,16 +44,55 @@ export function parseFrontmatter(text) {
 // vocabulary-dense opening of most SKILL.md / plugin docs, so recall barely suffers.
 export const clipped = (text = '') => text.replace(/\0/g, '').slice(0, 4000);
 
-// Provenance and installation state are separate: `distribution` records whether something is
-// installed, while `sourceClass` says who published it. Unknown is explicit because a public
-// repository, marketplace listing, or registry record is not proof of a publisher's identity.
+// Shared catalog contract with c3 (see CATALOG_SCHEMA.md). `availability` is install state;
+// `packaging` is how the capability is shipped. Legacy `distribution` is migration-only input.
+const AVAILABILITIES = new Set(['built-in', 'installed', 'installable', 'copy-and-adapt', 'authoring-required', 'unknown']);
+const PACKAGINGS = new Set(['built-in', 'standalone', 'plugin', 'plugin-component', 'unknown']);
+const EXECUTIONS = new Set(['prompt', 'isolated-agent', 'deterministic-hook', 'external-service', 'background-monitor', 'unknown']);
 const SOURCE_CLASSES = new Set(['official', 'community', 'unknown']);
 const MATURITY_LEVELS = new Set(['stable', 'experimental', 'deprecated', 'unknown']);
-const DISTRIBUTIONS = new Set(['built-in', 'installed', 'installable', 'copy-and-adapt', 'unknown']);
+const EXECUTION_ALIASES = {
+    deterministic: 'deterministic-hook',
+    background: 'background-monitor',
+    agent: 'isolated-agent',
+};
+const LEGACY_PACKAGING = {
+    builtin: 'built-in',
+    'built-in': 'built-in',
+    standalone: 'standalone',
+    plugin: 'plugin',
+    'plugin-component': 'plugin-component',
+};
+const LEGACY_AVAILABILITY = {
+    'built-in': 'built-in',
+    installed: 'installed',
+    installable: 'installable',
+    'copy-and-adapt': 'copy-and-adapt',
+    'authoring-required': 'authoring-required',
+};
 const list = (value, fallback) => {
     const items = (Array.isArray(value) ? value : value ? [value] : []).map((item) => String(item).trim()).filter(Boolean);
     return items.length ? [...new Set(items)] : fallback;
 };
+
+function migrateDistribution(distribution) {
+    const value = String(distribution || '').trim().toLowerCase();
+    if (!value) return { availability: 'unknown', packaging: 'unknown' };
+    if (LEGACY_PACKAGING[value]) {
+        const packaging = LEGACY_PACKAGING[value];
+        const availability = packaging === 'built-in' ? 'built-in'
+            : packaging === 'standalone' ? 'installed'
+            : 'installable';
+        return { availability, packaging };
+    }
+    if (LEGACY_AVAILABILITY[value]) {
+        return {
+            availability: LEGACY_AVAILABILITY[value],
+            packaging: value === 'built-in' ? 'built-in' : 'unknown',
+        };
+    }
+    return { availability: 'unknown', packaging: 'unknown' };
+}
 
 export function inferSourceClass(source = '') {
     if (source === 'openai/skills') return 'official';
@@ -62,13 +101,23 @@ export function inferSourceClass(source = '') {
 }
 
 export function withCatalogMetadata(entry) {
+    const migrated = migrateDistribution(entry.distribution);
+    const availability = AVAILABILITIES.has(entry.availability) ? entry.availability : migrated.availability;
+    const packaging = PACKAGINGS.has(entry.packaging) ? entry.packaging : migrated.packaging;
+    const executionRaw = EXECUTION_ALIASES[entry.execution] || entry.execution || 'unknown';
     const sourceClass = SOURCE_CLASSES.has(entry.sourceClass) ? entry.sourceClass : inferSourceClass(entry.source);
+    const { distribution, ...rest } = entry;
     return {
-        ...entry,
+        ...rest,
+        id: entry.id || `${entry.kind}:${entry.name}`,
+        platform: entry.platform || 'codex',
+        availability,
+        packaging,
+        domain: entry.domain || 'unknown',
+        execution: EXECUTIONS.has(executionRaw) ? executionRaw : 'unknown',
         sourceClass,
         license: String(entry.license || 'unknown').trim() || 'unknown',
         maturity: MATURITY_LEVELS.has(entry.maturity) ? entry.maturity : 'unknown',
-        distribution: DISTRIBUTIONS.has(entry.distribution) ? entry.distribution : 'unknown',
         surface: list(entry.surface, ['unknown']),
         parentPlugin: entry.parentPlugin || null,
         permissions: list(entry.permissions, ['unknown']),
