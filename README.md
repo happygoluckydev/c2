@@ -120,7 +120,7 @@ sequenceDiagram
 - [anthropics/skills](https://github.com/anthropics/skills) — cross-ecosystem discovery leads; Claude-specific entries are leads to review and adapt, not directly installable Codex plugins
 - [VoltAgent/awesome-agent-skills](https://github.com/VoltAgent/awesome-agent-skills) — vendor and community skills
 - [aitmpl.com](https://github.com/davila7/claude-code-templates) components catalog — community skill templates
-- [Official MCP Registry](https://registry.modelcontextprotocol.io) — active MCP servers
+- [Official MCP Registry](https://registry.modelcontextprotocol.io) — active public MCP servers; inclusion in the official registry does not mean the publisher itself is official
 
 Source counts depend on the live upstream catalogs and the user's installed Codex environment. Add sources by editing `plugins/c2/skills/c2/scripts/build-index.mjs` (one function per source).
 
@@ -146,6 +146,11 @@ from a repository name or a marketplace listing. `search.mjs --all` emits a mach
 trace with the execution time, catalog schema, catalog build time, query tokens, and result counts.
 `--get` emits a separate trace on stderr with the requested and matched records, so a response
 never needs to invent a `# get:` line.
+
+Publisher provenance and installation state are separate. For example, an installed capability
+uses `distribution: "installed"`, while `sourceClass` remains `official`, `community`, or
+`unknown`. MCP Registry lifecycle values such as `active` are not publisher verification, so
+registry entries remain `sourceClass: "unknown"` unless a dedicated verification signal exists.
 
 ## Install
 
@@ -187,7 +192,10 @@ API keys stay in your environment variables. Review the provider's terms and dat
 
 ## Keeping the catalog fresh
 
-On `/c2` or `/cc`, `search.mjs` builds the catalog synchronously if it is missing. If it exists but is older than 7 days, the current catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM).
+On `/c2` or `/cc`, `search.mjs` builds the catalog synchronously if it is missing. If it exists but
+is older than 7 days, or its schema version differs from the current implementation, the current
+catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM). Legacy
+entries receive conservative `unknown` metadata while that rebuild is in progress.
 
 To refresh on a fixed schedule instead:
 
