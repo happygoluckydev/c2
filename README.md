@@ -1,15 +1,15 @@
 # c2 — Codex Concierge
 
-> **Don't reinvent the wheel.** The Codex ecosystem already ships skills, plugins, and MCP servers — including the ones already installed on your machine. The hard part isn't building your own — it's knowing what already exists. c2 checks *before* you build.
+> **For people who already use many Codex skills, plugins, and MCP servers — and still lose time hunting the ecosystem before every task.**
 
-**/c2** (or the short alias **/cc**) tells you the best combination of Codex **skills, plugins, and MCP servers** for whatever task you describe — using a **local RAG catalog** so that each recommendation costs almost zero tokens.
+c2 turns that search into a local lookup. Instead of an afternoon of marketplace browsing or a large web-research loop, **/c2** (or **/cc**) returns a reuse-first shortlist in one pass — installed assets first, then official and community options — with almost no query-time token cost.
 
 ```
 /c2 Find a Codex capability for GitHub PR review comments
 /cc Find a Codex capability for GitHub PR review comments
 ```
 
-→ Returns a prioritized proposal table (what to reuse, what to add, what *not* to add) with ready-to-run install commands and a visible search trace.
+→ Prioritized table: what to reuse, what to add, what *not* to add, plus ready-to-run install commands and a visible search trace.
 
 The plugin ships Codex command prompts in `plugins/c2/commands/`: `/c2` is the primary command, and `/cc` is an alias that runs the same workflow.
 
@@ -128,15 +128,16 @@ Catalog builds a local search index on your machine. In default fulltext mode, t
 
 ### Entry metadata and audit trace
 
-Every catalog entry uses schema version 2 and includes provenance and safety fields in addition
-to its searchable name, tags, and description:
+Every catalog entry uses schema version 3 and includes provenance and safety fields in addition
+to its searchable name, tags, and description (see [CATALOG_SCHEMA.md](./CATALOG_SCHEMA.md)):
 
 | Field | Purpose |
 |---|---|
+| `availability` | `built-in`, `installed`, `installable`, `copy-and-adapt`, `authoring-required`, or `unknown` |
+| `packaging` | `built-in`, `standalone`, `plugin`, `plugin-component`, or `unknown` |
 | `sourceClass` | `official`, `community`, or `unknown` publisher provenance |
 | `license` | SPDX identifier when the source provides one; otherwise `unknown` |
 | `maturity` | `stable`, `experimental`, `deprecated`, or `unknown` |
-| `distribution` | `built-in`, `installed`, `installable`, `copy-and-adapt`, or `unknown` |
 | `surface` | One or more applicable surfaces, or `unknown` when the source cannot establish them |
 | `parentPlugin` | Owning plugin name for a bundled component; otherwise `null` |
 | `permissions` | Declared access classes when known; otherwise `unknown` |
@@ -148,7 +149,7 @@ trace with the execution time, catalog schema, catalog build time, query tokens,
 never needs to invent a `# get:` line.
 
 Publisher provenance and installation state are separate. For example, an installed capability
-uses `distribution: "installed"`, while `sourceClass` remains `official`, `community`, or
+uses `availability: "installed"`, while `sourceClass` remains `official`, `community`, or
 `unknown`. MCP Registry lifecycle values such as `active` are not publisher verification, so
 registry entries remain `sourceClass: "unknown"` unless a dedicated verification signal exists.
 
@@ -235,7 +236,7 @@ This never deletes skills, only moves them. Archiving is refused when no Codex s
 
 ## 日本語
 
-**「車輪の再発明をしたくない」から生まれたツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。
+**すでに複数のスキル・プラグイン・MCP を使っている人が、毎回のエコシステム探索に費やす時間を減らすためのツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。
 
 クロールは HTTP のみ（LLM 不使用）。ローカル RAG カタログが無い初回は同期構築、7 日超で古い場合は手元のカタログで即応答しつつバックグラウンド再構築します。提案時の検索はローカルのみなのでクレジット消費を最小化できます。導入は `plugins/c2` を Codex の Plugins ワークフローから追加します。これで `c2` スキルと `/c2`・`/cc` の command prompt が使えるようになります。新しいセッションで `/c2 <やりたいこと>` または `/cc <やりたいこと>` を実行してください。
 
