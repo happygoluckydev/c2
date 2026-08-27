@@ -48,6 +48,9 @@ Use c2 before proposing a new skill, plugin, MCP server, or integration. Search 
    node <c2-skill-dir>/scripts/search.mjs --get "<kind:name1,kind:name2,...>"
    ```
 
+   Values are comma-separated. If a capability name contains a comma, pass that name as its own
+   `--get` flag.
+
 5. Do not install, authorize, or enable a result unless the user explicitly requests it.
 
 ## Required response

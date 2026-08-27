@@ -38,8 +38,9 @@ Optional fields:
 - `availability` and `packaging` are independent. The legacy `distribution` field is read only
   as a migration input and must not be emitted by newly built catalogs.
 - Legacy `distribution` migration:
-  - packaging-shaped values (`builtin`/`built-in`/`standalone`/`plugin`/`plugin-component`)
-    become `packaging`, with `availability` inferred as `built-in`, `installed`, or `installable`
+  - packaging-shaped values (`builtin`/`standalone`/`plugin`/`plugin-component`) become
+    `packaging`, while `availability` remains `unknown`; `built-in` becomes both
+    `packaging: built-in` and `availability: built-in`
   - availability-shaped values (`installed`/`installable`/`copy-and-adapt`/`built-in`)
     become `availability`, with `packaging` set to `built-in` or `unknown`
 - Unknown facts stay `unknown`; publisher identity, license, maturity, and permissions are never
@@ -47,6 +48,8 @@ Optional fields:
 - Dedupe keys and ID lookup are case-insensitive, while the original display casing is preserved.
 - A bare name may be used with `--get` only when it identifies one record. Otherwise callers must
   pass the stable `kind:name` ID returned by `--all`.
+- `--get` values are comma-separated. A name containing a comma must be passed as its own
+  `--get` flag (the resolver also accepts its raw `kind:name` ID for compatibility).
 - Platform-specific kinds and sources are valid extensions. Their shared fields keep the meanings
   above.
 - MCP `install` strings must not embed registry-supplied server names. Use a placeholder such as
@@ -54,6 +57,6 @@ Optional fields:
 
 ## Catalog metadata
 
-`meta.json` contains `schemaVersion`, `builtAt`, `total`, `counts`, `fulltext`, `vectors`, and
-`errors`. The current shared schema version is `3`. A missing or different `schemaVersion` makes
-the catalog stale and triggers a rebuild.
+`meta.json` contains `schemaVersion`, `builtAt`, `total`, `counts`, `fulltext`, `vectors`,
+`degraded`, and `errors`. The current shared schema version is `3`. A missing or different
+`schemaVersion` makes the catalog stale and triggers a rebuild.

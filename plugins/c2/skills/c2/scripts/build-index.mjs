@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CATALOG, CATALOG_SCHEMA_VERSION, CODEX_HOME, DATA_DIR, META, clipped, embedTexts, loadConfig, parseFrontmatter, resolveProvider, walk, withCatalogMetadata, writeAtomic, writeVectors } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, CODEX_HOME, DATA_DIR, META, clipped, embedTexts, loadConfig, metadataWarnings, parseFrontmatter, resolveProvider, walk, withCatalogMetadata, writeAtomic, writeVectors } from './catalog.mjs';
 
 const config = loadConfig();
 const errors = [];
@@ -58,9 +58,11 @@ function safeForInstallString(value, source) {
 // Indexed first (and unconditionally, before any network source) so "you already have this" is
 // always available to the reuse-first recommendation policy.
 function pluginNameFor(file, root) {
-    let directory = path.dirname(file);
+    let directory = path.resolve(path.dirname(file));
     const boundary = path.resolve(root);
-    while (directory.startsWith(boundary)) {
+    while (true) {
+        const relative = path.relative(boundary, directory);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) break;
         const manifest = path.join(directory, '.codex-plugin', 'plugin.json');
         if (fs.existsSync(manifest)) {
             try { return JSON.parse(fs.readFileSync(manifest, 'utf8')).name || path.basename(directory); }
@@ -283,16 +285,52 @@ indexMarketplace();
 // Network sources run in parallel (wall-clock = slowest source, not the sum of all of them).
 // Array order is also dedup priority below: installed (already run) -> official -> community -> registry.
 const jobs = [
-    ['openai/skills', indexOpenAISkills],
-    ['anthropics/skills', indexAnthropicSkills],
-    ['VoltAgent skills', indexVoltAgentSkills],
-    ['templates', indexTemplates],
-    ['MCP Registry', indexMcpRegistry],
+    ['openai/skills', 'openai/skills', indexOpenAISkills],
+    ['anthropics/skills', 'anthropics/skills', indexAnthropicSkills],
+    ['VoltAgent/awesome-agent-skills', 'VoltAgent/awesome-agent-skills', indexVoltAgentSkills],
+    ['aitmpl.com', 'aitmpl.com', indexTemplates],
+    ['MCP Registry', 'MCP Registry', indexMcpRegistry],
 ];
-const results = await Promise.allSettled(jobs.map(([, job]) => job()));
+const results = await Promise.allSettled(jobs.map(([, , job]) => job()));
 results.forEach((result, index) => {
     if (result.status === 'rejected') errors.push(`${jobs[index][0]}: ${result.reason?.message || result.reason}`);
 });
+
+// A rate-limited or temporarily unavailable network source must not erase records from the
+// previous catalog. Carrying them forward keeps the installed-before-community priority intact
+// while degraded=true makes the stale provenance visible to search callers.
+const previousBySource = new Map();
+if (fs.existsSync(CATALOG)) {
+    for (const line of fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean)) {
+        try {
+            const entry = JSON.parse(line);
+            if (!entry.source) continue;
+            if (!previousBySource.has(entry.source)) previousBySource.set(entry.source, []);
+            previousBySource.get(entry.source).push(entry);
+        } catch { /* Ignore malformed legacy rows while preserving valid sources. */ }
+    }
+}
+let degraded = results.some((result) => result.status === 'rejected');
+for (const [, source,] of jobs) {
+    const currentCount = entries.filter((entry) => entry.source === source).length;
+    const previous = previousBySource.get(source) || [];
+    if (currentCount === 0 && previous.length) {
+        entries.push(...previous.map((entry) => withCatalogMetadata(entry)));
+        errors.push(`${source}: carried forward ${previous.length} previous entries after this source produced none.`);
+        degraded = true;
+    }
+}
+
+const sourcePriority = new Map([
+    ['installed', 0],
+    ['installed-plugin', 1],
+    ['openai/skills', 10],
+    ['anthropics/skills', 20],
+    ['VoltAgent/awesome-agent-skills', 30],
+    ['aitmpl.com', 40],
+    ['MCP Registry', 50],
+]);
+entries.sort((a, b) => (sourcePriority.get(a.source) ?? 5) - (sourcePriority.get(b.source) ?? 5));
 
 // Dedup by kind+name, first entry wins. Because entries were appended in priority order above
 // (installed -> official -> community -> registry), first-wins is the same thing as priority-wins.
@@ -326,6 +364,7 @@ if (provider?.missingKey) {
 }
 
 const counts = Object.fromEntries(['skill', 'plugin', 'mcp'].map((kind) => [kind, unique.filter((entry) => entry.kind === kind).length]));
-const meta = { schemaVersion: CATALOG_SCHEMA_VERSION, builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, errors };
-fs.writeFileSync(META, JSON.stringify(meta, null, 2));
+errors.push(...metadataWarnings);
+const meta = { schemaVersion: CATALOG_SCHEMA_VERSION, builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, degraded, errors };
+writeAtomic(META, JSON.stringify(meta, null, 2));
 console.log(JSON.stringify(meta, null, 2));

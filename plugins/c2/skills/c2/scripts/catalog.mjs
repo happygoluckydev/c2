@@ -10,7 +10,7 @@ import path from 'node:path';
 
 // ~/.codex/c2 is the single data store for this tool. Path constants live only here so a future
 // edit can't create a split-brain between build-index/search/prune reading different locations.
-export const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+export const CODEX_HOME = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
 export const DATA_DIR = path.join(CODEX_HOME, 'c2');
 export const CATALOG = path.join(DATA_DIR, 'catalog.jsonl');
 export const META = path.join(DATA_DIR, 'meta.json');
@@ -56,6 +56,7 @@ const EXECUTION_ALIASES = {
     background: 'background-monitor',
     agent: 'isolated-agent',
 };
+export const metadataWarnings = [];
 const LEGACY_PACKAGING = {
     builtin: 'built-in',
     'built-in': 'built-in',
@@ -80,10 +81,7 @@ function migrateDistribution(distribution) {
     if (!value) return { availability: 'unknown', packaging: 'unknown' };
     if (LEGACY_PACKAGING[value]) {
         const packaging = LEGACY_PACKAGING[value];
-        const availability = packaging === 'built-in' ? 'built-in'
-            : packaging === 'standalone' ? 'installed'
-            : 'installable';
-        return { availability, packaging };
+        return { availability: value === 'built-in' ? 'built-in' : 'unknown', packaging };
     }
     if (LEGACY_AVAILABILITY[value]) {
         return {
@@ -102,25 +100,96 @@ export function inferSourceClass(source = '') {
 
 export function withCatalogMetadata(entry) {
     const migrated = migrateDistribution(entry.distribution);
-    const availability = AVAILABILITIES.has(entry.availability) ? entry.availability : migrated.availability;
-    const packaging = PACKAGINGS.has(entry.packaging) ? entry.packaging : migrated.packaging;
-    const executionRaw = EXECUTION_ALIASES[entry.execution] || entry.execution || 'unknown';
-    const sourceClass = SOURCE_CLASSES.has(entry.sourceClass) ? entry.sourceClass : inferSourceClass(entry.source);
+    const normalizeEnum = (field, value, allowed) => {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (!normalized) return null;
+        if (allowed.has(normalized)) return normalized;
+        metadataWarnings.push(`${field}=${String(value).trim().replace(/[\t\n\r]/g, ' ').slice(0, 100)}`);
+        return null;
+    };
+    const availabilityInput = normalizeEnum('availability', entry.availability, AVAILABILITIES);
+    const packagingInput = normalizeEnum('packaging', entry.packaging, PACKAGINGS);
+    const executionValue = normalizeEnum('execution', entry.execution, new Set([...EXECUTIONS, ...Object.keys(EXECUTION_ALIASES)]));
+    const executionRaw = executionValue ? EXECUTION_ALIASES[executionValue] || executionValue : null;
+    const sourceClass = normalizeEnum('sourceClass', entry.sourceClass, SOURCE_CLASSES) || inferSourceClass(entry.source);
+    const maturity = normalizeEnum('maturity', entry.maturity, MATURITY_LEVELS);
     const { distribution, ...rest } = entry;
     return {
         ...rest,
         id: entry.id || `${entry.kind}:${entry.name}`,
         platform: entry.platform || 'codex',
-        availability,
-        packaging,
+        availability: availabilityInput || migrated.availability,
+        packaging: packagingInput || migrated.packaging,
         domain: entry.domain || 'unknown',
-        execution: EXECUTIONS.has(executionRaw) ? executionRaw : 'unknown',
+        execution: executionRaw || 'unknown',
         sourceClass,
         license: String(entry.license || 'unknown').trim() || 'unknown',
-        maturity: MATURITY_LEVELS.has(entry.maturity) ? entry.maturity : 'unknown',
+        maturity: maturity || 'unknown',
         surface: list(entry.surface, ['unknown']),
         parentPlugin: entry.parentPlugin || null,
         permissions: list(entry.permissions, ['unknown']),
+    };
+}
+
+function recordId(entry) {
+    return String(entry.id || `${entry.kind}:${entry.name}`).toLowerCase();
+}
+
+export function resolveCatalogRecords(docs, requestedValues) {
+    const byId = new Map();
+    const byName = new Map();
+    for (const doc of docs) {
+        const id = recordId(doc);
+        if (!byId.has(id)) byId.set(id, []);
+        byId.get(id).push(doc);
+        const name = String(doc.name || '').toLowerCase();
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name).push(doc);
+    }
+
+    const requested = [];
+    const missing = [];
+    const ambiguous = [];
+    const fallback = [];
+    const selected = new Set();
+    const resolve = (value) => {
+        const normalized = value.trim().toLowerCase();
+        if (!normalized) return;
+        requested.push(normalized);
+        const idMatches = byId.get(normalized) || [];
+        if (idMatches.length === 1) {
+            selected.add(idMatches[0]);
+            return;
+        }
+        if (idMatches.length > 1) {
+            ambiguous.push(normalized);
+            return;
+        }
+        const nameMatches = byName.get(normalized) || [];
+        if (nameMatches.length === 1) selected.add(nameMatches[0]);
+        else if (nameMatches.length > 1) ambiguous.push(normalized);
+        else missing.push(normalized);
+    };
+
+    for (const original of requestedValues) {
+        const raw = String(original ?? '').trim();
+        if (!raw) continue;
+        const wholeId = byId.get(raw.toLowerCase()) || [];
+        if (raw.includes(',') && wholeId.length === 1) {
+            requested.push(raw.toLowerCase());
+            selected.add(wholeId[0]);
+            fallback.push(raw.toLowerCase());
+            continue;
+        }
+        for (const value of raw.split(',')) resolve(value);
+    }
+
+    return {
+        records: docs.filter((doc) => selected.has(doc)),
+        requested,
+        missing: [...new Set(missing)],
+        ambiguous: [...new Set(ambiguous)],
+        fallback: [...new Set(fallback)],
     };
 }
 

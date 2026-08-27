@@ -133,8 +133,12 @@ to its searchable name, tags, and description (see [CATALOG_SCHEMA.md](./CATALOG
 
 | Field | Purpose |
 |---|---|
+| `id` | Stable `kind:name` identity used for finalist lookup |
+| `platform` | Platform on which the capability is usable |
 | `availability` | `built-in`, `installed`, `installable`, `copy-and-adapt`, `authoring-required`, or `unknown` |
 | `packaging` | `built-in`, `standalone`, `plugin`, `plugin-component`, or `unknown` |
+| `domain` | Normalized task domain, or `unknown` |
+| `execution` | `prompt`, `isolated-agent`, `deterministic-hook`, `external-service`, `background-monitor`, or `unknown` |
 | `sourceClass` | `official`, `community`, or `unknown` publisher provenance |
 | `license` | SPDX identifier when the source provides one; otherwise `unknown` |
 | `maturity` | `stable`, `experimental`, `deprecated`, or `unknown` |
@@ -199,7 +203,8 @@ API keys stay in your environment variables. Review the provider's terms and dat
 On `/c2` or `/cc`, `search.mjs` builds the catalog synchronously if it is missing. If it exists but
 is older than 7 days, or its schema version differs from the current implementation, the current
 catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM). Legacy
-entries receive conservative `unknown` metadata while that rebuild is in progress.
+entries receive conservative `unknown` metadata for facts that are not explicit in the legacy
+record while that rebuild is in progress.
 
 To refresh on a fixed schedule instead:
 
