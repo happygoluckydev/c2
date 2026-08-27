@@ -40,6 +40,10 @@ export function parseFrontmatter(text) {
     return result;
 }
 
+export const entryId = (entry) => entry.id || `${entry.kind}:${entry.name}`;
+export const kindName = (entry) => `${entry.kind}:${entry.name}`;
+export const readFrontmatterFile = (file) => parseFrontmatter(fs.readFileSync(file, 'utf8'));
+
 // First 4000 characters only: keeps the catalog from bloating while still capturing the
 // vocabulary-dense opening of most SKILL.md / plugin docs, so recall barely suffers.
 export const clipped = (text = '') => text.replace(/\0/g, '').slice(0, 4000);
@@ -109,7 +113,7 @@ export function withCatalogMetadata(entry) {
     const { distribution, ...rest } = entry;
     return {
         ...rest,
-        id: entry.id || `${entry.kind}:${entry.name}`,
+        id: entryId(entry),
         platform: entry.platform || 'codex',
         availability,
         packaging,

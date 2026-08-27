@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CATALOG, CATALOG_SCHEMA_VERSION, META, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider, withCatalogMetadata } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, META, embedTexts, entryId, loadConfig, readJsonSafe, readVectors, resolveProvider, withCatalogMetadata } from './catalog.mjs';
 
 const BUILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-index.mjs');
 
@@ -60,11 +60,17 @@ function stale() {
 const docs = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
     try { return [withCatalogMetadata(JSON.parse(line))]; } catch { return []; }
 });
+const emitTrace = (kind, writer) => {
+    const meta = readJsonSafe(META) || {};
+    writer(`# trace: ${kind}`);
+    writer(`# executedAt: ${new Date().toISOString()}`);
+    writer(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
+};
 
 // --- --get: stable-ID lookup for the finalists only ---
 if (requested) {
     const values = [...new Set(requested.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean))];
-    const recordId = (doc) => String(doc.id || `${doc.kind}:${doc.name}`).toLowerCase();
+    const recordId = (doc) => entryId(doc).toLowerCase();
     const byId = new Map(docs.map((doc) => [recordId(doc), doc]));
     const byName = new Map();
     for (const doc of docs) {
@@ -86,10 +92,7 @@ if (requested) {
     }
     // fulltext is search-only vocabulary; stripping it here keeps --get's output small.
     const matches = docs.filter((doc) => selected.has(doc)).map(({ fulltext, ...doc }) => doc);
-    const meta = readJsonSafe(META) || {};
-    console.error('# trace: get');
-    console.error(`# executedAt: ${new Date().toISOString()}`);
-    console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
+    emitTrace('get', console.error);
     console.error(`# get: requested[${values.join(',')}] matched[${matches.map(recordId).join(',')}]`);
     console.log(JSON.stringify(matches, null, 2));
     process.exit(0);
@@ -196,18 +199,13 @@ for (const row of scored) {
     byKind.get(row.doc.kind).push(row);
 }
 
-const meta = readJsonSafe(META) || {};
-const executedAt = new Date().toISOString();
-
-console.log('# trace: search');
-console.log(`# executedAt: ${executedAt}`);
-console.log(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
+emitTrace('search', console.log);
 console.log(`# mode: ${mode}`);
 console.log(`# query: keywords[${keywordTokens.join(' ')}]${taskTokens.length ? ` + task[${taskTokens.join(' ')}]` : ''}`);
 console.log(`# hits: ${Object.keys(caps).map((kind) => `${kind} matched=${(byKind.get(kind) || []).length} returned=${Math.min(caps[kind], (byKind.get(kind) || []).length)}`).join(' / ')}`);
 console.log('id\tkind\tname\tsource\tmatched_fields\tdescription');
 for (const kind of Object.keys(caps)) {
     for (const row of (byKind.get(kind) || []).slice(0, caps[kind])) {
-        console.log(`${row.doc.id || `${row.doc.kind}:${row.doc.name}`}\t${row.doc.kind}\t${row.doc.name}\t${row.doc.source}\t${row.matches.join(',')}\t${(row.doc.description || '').replace(/[\t\n]/g, ' ').slice(0, 110)}`);
+        console.log(`${entryId(row.doc)}\t${row.doc.kind}\t${row.doc.name}\t${row.doc.source}\t${row.matches.join(',')}\t${(row.doc.description || '').replace(/[\t\n]/g, ' ').slice(0, 110)}`);
     }
 }

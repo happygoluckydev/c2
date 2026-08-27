@@ -13,7 +13,7 @@
 //   node prune.mjs --apply   # archive unused skills to ~/.codex/skills-archive/ (never deletes)
 import fs from 'node:fs';
 import path from 'node:path';
-import { CODEX_HOME, parseFrontmatter, walk } from './catalog.mjs';
+import { CODEX_HOME, readFrontmatterFile, walk } from './catalog.mjs';
 
 const skillsDir = path.join(CODEX_HOME, 'skills');
 const archiveDir = path.join(CODEX_HOME, 'skills-archive');
@@ -25,7 +25,7 @@ const installed = fs.existsSync(skillsDir)
     ? fs.readdirSync(skillsDir, { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(skillsDir, entry.name, 'SKILL.md')))
         .map((entry) => {
-            const fm = parseFrontmatter(fs.readFileSync(path.join(skillsDir, entry.name, 'SKILL.md'), 'utf8'));
+            const fm = readFrontmatterFile(path.join(skillsDir, entry.name, 'SKILL.md'));
             return { dir: entry.name, name: fm.name || entry.name, tokens: Math.round(fm.fmLen / 4) };
         })
     : [];

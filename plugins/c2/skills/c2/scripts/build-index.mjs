@@ -7,13 +7,40 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CATALOG, CATALOG_SCHEMA_VERSION, CODEX_HOME, DATA_DIR, META, clipped, embedTexts, loadConfig, parseFrontmatter, resolveProvider, walk, withCatalogMetadata, writeAtomic, writeVectors } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, CODEX_HOME, DATA_DIR, META, clipped, embedTexts, kindName, loadConfig, readFrontmatterFile, resolveProvider, walk, withCatalogMetadata, writeAtomic, writeVectors } from './catalog.mjs';
 
 const config = loadConfig();
 const errors = [];
 const entries = [];
 const home = os.homedir();
 const add = (entry) => entries.push(withCatalogMetadata({ tags: [], ...entry }));
+const ALL_SURFACES = ['cli', 'ide', 'desktop'];
+const addSkill = (entry) => {
+    const { kind, execution, packaging, surface, parentPlugin, ...rest } = {
+        kind: 'skill',
+        execution: 'prompt',
+        packaging: 'standalone',
+        surface: ALL_SURFACES,
+        ...entry,
+    };
+    add({
+        kind,
+        ...rest,
+        packaging,
+        execution,
+        surface,
+        ...(parentPlugin === undefined ? {} : { parentPlugin }),
+    });
+};
+const addPlugin = (entry) => {
+    const { packaging, surface, ...rest } = {
+        kind: 'plugin',
+        packaging: 'plugin',
+        surface: ['cli', 'desktop'],
+        ...entry,
+    };
+    add({ ...rest, packaging, surface });
+};
 
 const fetchOk = async (url) => {
     const response = await fetch(url, { headers: { 'User-Agent': 'c2-codex-concierge' } });
@@ -30,14 +57,15 @@ const fetchText = (url) => fetchOk(url).then((response) => response.text());
 // Segment charset includes "." (in addition to alnum/_/-) so legitimate versioned paths like
 // "tools/v1.2-migrate" aren't silently dropped from the catalog. (/code-review, ported from c3)
 const SAFE_CATALOG_PATH = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)*$/;
-function safeCatalogPath(value, source) {
+const unsafeGuard = (label, isValid) => (value, source) => {
     const candidate = String(value || '').trim();
-    if (!SAFE_CATALOG_PATH.test(candidate)) {
-        errors.push(`${source}: skipped unsafe path ${JSON.stringify(candidate).slice(0, 120)}`);
+    if (!isValid(candidate)) {
+        errors.push(`${source}: skipped unsafe ${label} ${JSON.stringify(candidate).slice(0, 120)}`);
         return null;
     }
     return candidate;
-}
+};
+const safeCatalogPath = unsafeGuard('path', (candidate) => SAFE_CATALOG_PATH.test(candidate));
 
 // safeCatalogPath is an allowlist shaped for aitmpl.com's path-like values; it's too strict for
 // free-form external values (URLs, package identifiers) from other sources that get interpolated
@@ -45,14 +73,16 @@ function safeCatalogPath(value, source) {
 // characters instead, so it fits VoltAgent README URLs and MCP registry fields. Applying it only to
 // aitmpl.com and leaving the other sources unguarded was a gap found in /code-review (ported from c3).
 const UNSAFE_INSTALL_CHARS = /[;&|`$()<>\n\r"'\\]/;
-function safeForInstallString(value, source) {
-    const candidate = String(value || '').trim();
-    if (!candidate || UNSAFE_INSTALL_CHARS.test(candidate)) {
-        errors.push(`${source}: skipped unsafe value ${JSON.stringify(candidate).slice(0, 120)}`);
+const safeForInstallString = unsafeGuard('value', (candidate) => candidate && !UNSAFE_INSTALL_CHARS.test(candidate));
+
+const readJsonReporting = (file, source) => {
+    try {
+        return { value: JSON.parse(fs.readFileSync(file, 'utf8')) };
+    } catch (error) {
+        errors.push(`${source}: ${error.message}`);
         return null;
     }
-    return candidate;
-}
+};
 
 // --- Source: skills already installed in this Codex environment ---
 // Indexed first (and unconditionally, before any network source) so "you already have this" is
@@ -63,7 +93,9 @@ function pluginNameFor(file, root) {
     while (directory.startsWith(boundary)) {
         const manifest = path.join(directory, '.codex-plugin', 'plugin.json');
         if (fs.existsSync(manifest)) {
-            try { return JSON.parse(fs.readFileSync(manifest, 'utf8')).name || path.basename(directory); }
+            const result = readJsonReporting(manifest, `plugin:${manifest}`);
+            if (!result) return null;
+            try { return result.value.name || path.basename(directory); }
             catch (error) { errors.push(`plugin:${manifest}: ${error.message}`); return null; }
         }
         const parent = path.dirname(directory);
@@ -76,10 +108,9 @@ function pluginNameFor(file, root) {
 function indexSkills(root, source) {
     for (const file of walk(root, (candidate) => path.basename(candidate) === 'SKILL.md')) {
         try {
-            const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
+            const fm = readFrontmatterFile(file);
             const parentPlugin = pluginNameFor(file, root);
-            add({
-                kind: 'skill',
+            addSkill({
                 name: fm.name || path.basename(path.dirname(file)),
                 description: fm.description || '',
                 source,
@@ -87,8 +118,6 @@ function indexSkills(root, source) {
                 fulltext: clipped(fm.body),
                 availability: 'installed',
                 packaging: parentPlugin ? 'plugin-component' : 'standalone',
-                execution: 'prompt',
-                surface: ['cli', 'ide', 'desktop'],
                 parentPlugin,
             });
         } catch (error) { errors.push(`skill:${file}: ${error.message}`); }
@@ -100,9 +129,10 @@ function indexPlugins(root, source) {
     const isPluginManifest = (candidate) => path.basename(candidate) === 'plugin.json' && path.basename(path.dirname(candidate)) === '.codex-plugin';
     for (const file of walk(root, isPluginManifest)) {
         try {
-            const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-            add({
-                kind: 'plugin',
+            const result = readJsonReporting(file, `plugin:${file}`);
+            if (!result) continue;
+            const manifest = result.value;
+            addPlugin({
                 name: manifest.name || path.basename(path.dirname(path.dirname(file))),
                 description: manifest.description || manifest.interface?.shortDescription || '',
                 source,
@@ -110,8 +140,6 @@ function indexPlugins(root, source) {
                 install: 'Already available in this Codex environment.',
                 license: manifest.license || 'unknown',
                 availability: 'installed',
-                packaging: 'plugin',
-                surface: ['cli', 'desktop'],
             });
         } catch (error) { errors.push(`plugin:${file}: ${error.message}`); }
     }
@@ -122,19 +150,18 @@ function indexMarketplace() {
     const file = path.join(home, '.agents', 'plugins', 'marketplace.json');
     if (!fs.existsSync(file)) return;
     try {
-        const marketplace = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const result = readJsonReporting(file, 'marketplace');
+        if (!result) return;
+        const marketplace = result.value;
         for (const plugin of marketplace.plugins || []) {
             if (!plugin.name) continue;
-            add({
-                kind: 'plugin',
+            addPlugin({
                 name: plugin.name,
                 description: plugin.description || '',
                 source: `marketplace:${marketplace.name || 'personal'}`,
                 tags: [plugin.category].filter(Boolean),
                 install: 'Install or enable it from the Codex Plugins view.',
                 availability: 'installable',
-                packaging: 'plugin',
-                surface: ['cli', 'desktop'],
             });
         }
     } catch (error) { errors.push(`marketplace: ${error.message}`); }
@@ -150,7 +177,6 @@ async function indexRepoSkills(repo, ref, source, install) {
     const records = await Promise.allSettled(paths.map(async (file) => {
         const fm = parseFrontmatter(await fetchText(`https://raw.githubusercontent.com/${repo}/${ref}/${file}`));
         return {
-            kind: 'skill',
             name: fm.name || path.basename(path.dirname(file)),
             description: fm.description || '',
             source,
@@ -158,13 +184,10 @@ async function indexRepoSkills(repo, ref, source, install) {
             install: install(file),
             fulltext: clipped(fm.body),
             availability: source === 'openai/skills' ? 'installable' : 'copy-and-adapt',
-            packaging: 'standalone',
-            execution: 'prompt',
-            surface: ['cli', 'ide', 'desktop'],
         };
     }));
     records.forEach((record, index) => {
-        if (record.status === 'fulfilled') add(record.value);
+        if (record.status === 'fulfilled') addSkill(record.value);
         else errors.push(`${source}:${paths[index]}: ${record.reason?.message || record.reason}`);
     });
 }
@@ -190,16 +213,13 @@ async function indexVoltAgentSkills() {
         // etc. Validate before it reaches an install: string a user might copy-paste and run.
         const url = safeForInstallString(match[2], 'VoltAgent/awesome-agent-skills');
         if (!url) continue;
-        add({
-            kind: 'skill',
+        addSkill({
             name: match[1].trim(),
             description: match[3].trim(),
             source: 'VoltAgent/awesome-agent-skills',
             tags: ['community'],
             install: `Review ${url} and adapt the skill for Codex before installation.`,
             availability: 'copy-and-adapt',
-            packaging: 'standalone',
-            execution: 'prompt',
             surface: ['unknown'],
         });
     }
@@ -212,8 +232,7 @@ async function indexTemplates() {
     for (const skill of catalog.skills || []) {
         const skillPath = safeCatalogPath(skill.path, 'aitmpl.com');
         if (!skillPath) continue;
-        add({
-            kind: 'skill',
+        addSkill({
             // name uses the path (e.g. security/security-audit) because names collide across categories.
             name: skillPath,
             description: (skill.description || '').slice(0, 300),
@@ -221,8 +240,6 @@ async function indexTemplates() {
             tags: [skill.category, ...(Array.isArray(skill.keywords) ? skill.keywords : [])].filter(Boolean).slice(0, 12),
             install: 'Community template: review and adapt it for Codex before installation.',
             availability: 'copy-and-adapt',
-            packaging: 'standalone',
-            execution: 'prompt',
             surface: ['unknown'],
         });
     }
@@ -298,11 +315,11 @@ results.forEach((result, index) => {
 // (installed -> official -> community -> registry), first-wins is the same thing as priority-wins.
 const seen = new Set();
 const unique = entries.filter((entry) => {
-    const key = `${entry.kind}:${entry.name}`.toLowerCase();
+    const key = kindName(entry).toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-}).map((entry) => ({ ...entry, id: `${entry.kind}:${entry.name}` }));
+}).map((entry) => ({ ...entry, id: kindName(entry) }));
 
 // Lite install (--no-fulltext): drop body vocabulary to roughly halve the catalog's on-disk size.
 if (config.fulltext === false) for (const entry of unique) delete entry.fulltext;
