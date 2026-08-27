@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CATALOG, CATALOG_SCHEMA_VERSION, META, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider, withCatalogMetadata } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, DATA_DIR, META, REFRESH_LOG, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider, withCatalogMetadata } from './catalog.mjs';
 
 const BUILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-index.mjs');
 
@@ -42,24 +42,62 @@ if (!query && !requested) throw new Error('Usage: --all "keywords" [--task "task
 if (!fs.existsSync(CATALOG)) {
     if (requested) throw new Error('No catalog yet. Run a --all search first.');
     console.error('Catalog missing — building it now (HTTP only, no model call).');
+    // A non-zero exit means at least one source or the vector build failed; that is only fatal if
+    // no catalog landed. When a partial catalog exists, searching it beats refusing to answer, but
+    // the degradation is stated rather than hidden.
     try { execFileSync(process.execPath, [BUILD], { stdio: 'inherit' }); }
-    catch (error) { throw new Error(`Catalog build failed: ${error.message}`); }
+    catch (error) {
+        if (!fs.existsSync(CATALOG)) throw new Error(`Catalog build failed: ${error.message}`);
+        console.error(`Catalog build reported failures (${error.message}); searching the partial catalog.`);
+    }
 } else if (query && stale()) {
-    console.error('Catalog is stale — serving it now and refreshing in the background.');
-    const refresh = spawn(process.execPath, [BUILD], { detached: true, stdio: 'ignore' });
+    console.error(`Catalog is stale — serving it now and refreshing in the background (log: ${REFRESH_LOG}).`);
+    // The background build is detached and nobody is watching its streams, so its output is
+    // appended to a log file instead of being discarded: a refresh that keeps failing (network
+    // blocked, corrupted data dir) used to leave no trace at all, and every later query just kept
+    // reporting "stale" with no reachable explanation.
+    const log = openRefreshLog();
+    const refresh = spawn(process.execPath, [BUILD], { detached: true, stdio: ['ignore', log ?? 'ignore', log ?? 'ignore'] });
     refresh.on('error', (error) => console.error(`Background catalog refresh failed to start: ${error.message}`));
     refresh.unref();
+    // The child owns the descriptor now; this process closing its own copy must not become a
+    // failure of the search itself (spawn may already have closed it).
+    if (log !== null) try { fs.closeSync(log); } catch { /* already closed by spawn */ }
+}
+function openRefreshLog() {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        const log = fs.openSync(REFRESH_LOG, 'a');
+        fs.writeSync(log, `\n=== ${new Date().toISOString()} background refresh ===\n`);
+        return log;
+    } catch (error) {
+        console.error(`Cannot open ${REFRESH_LOG} (${error.message}); background refresh output will be discarded.`);
+        return null;
+    }
 }
 function stale() {
     const meta = readJsonSafe(META);
     if (!meta) return true;
     if (meta.schemaVersion !== CATALOG_SCHEMA_VERSION) return true;
-    return Date.now() - Date.parse(meta.builtAt) > 7 * 24 * 60 * 60 * 1000;
+    // A missing or unparseable builtAt yields NaN, and every NaN comparison is false — which used
+    // to mean "fresh forever", so a corrupted meta.json silently froze the catalog. Treat an
+    // unreadable timestamp as stale instead.
+    const builtAt = Date.parse(meta.builtAt);
+    if (!Number.isFinite(builtAt)) return true;
+    return Date.now() - builtAt > 7 * 24 * 60 * 60 * 1000;
 }
 
-const docs = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
-    try { return [withCatalogMetadata(JSON.parse(line))]; } catch { return []; }
+// One unparseable line must not sink a whole search, but dropping it without a word hides real
+// catalog corruption (a truncated write, a partially synced data dir) behind "no results found",
+// so the count is reported. A catalog with lines but no usable rows is a hard failure: silently
+// searching zero documents would look like a legitimate "nothing matches your query".
+let skippedLines = 0;
+const lines = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean);
+const docs = lines.flatMap((line) => {
+    try { return [withCatalogMetadata(JSON.parse(line))]; } catch { skippedLines += 1; return []; }
 });
+if (skippedLines) console.error(`Skipped ${skippedLines} unparseable catalog line(s) in ${CATALOG}; rebuild with build-index.mjs if results look thin.`);
+if (!docs.length) throw new Error(`No usable entries in ${CATALOG} (${lines.length} line(s) unusable). Rebuild it with: node ${BUILD}`);
 
 // --- --get: stable-ID lookup for the finalists only ---
 if (requested) {

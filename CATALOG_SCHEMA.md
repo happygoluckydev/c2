@@ -54,6 +54,11 @@ Optional fields:
 
 ## Catalog metadata
 
-`meta.json` contains `schemaVersion`, `builtAt`, `total`, `counts`, `fulltext`, `vectors`, and
-`errors`. The current shared schema version is `3`. A missing or different `schemaVersion` makes
-the catalog stale and triggers a rebuild.
+`meta.json` contains `schemaVersion`, `builtAt`, `total`, `counts`, `fulltext`, `vectors`,
+`errors`, and `failedSources` (the sources whose crawl failed entirely). The current shared schema
+version is `3`. A missing, different, or unparseable `schemaVersion`/`builtAt` makes the catalog
+stale and triggers a rebuild.
+
+`build-index.mjs` also mirrors `errors` on stderr and exits non-zero when a source or the vector
+build failed, so a scheduled or background run cannot fail silently. If *every* network source
+fails while a catalog already exists, the build aborts without overwriting it.
