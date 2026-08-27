@@ -44,7 +44,7 @@ function safeCatalogPath(value, source) {
 // into install: strings the same way. This denylist variant rejects shell metacharacters/control
 // characters instead, so it fits VoltAgent README URLs and MCP registry fields. Applying it only to
 // aitmpl.com and leaving the other sources unguarded was a gap found in /code-review (ported from c3).
-const UNSAFE_INSTALL_CHARS = /[;&|`$()<>\n\r"'\\]/;
+const UNSAFE_INSTALL_CHARS = /[;&|`$()<>\n\r\t"'\\]|[\u0000-\u001f\u007f]/;
 function safeForInstallString(value, source) {
     const candidate = String(value || '').trim();
     if (!candidate || UNSAFE_INSTALL_CHARS.test(candidate)) {
@@ -146,7 +146,13 @@ function indexMarketplace() {
 // of entries (see indexTemplates / indexMcpRegistry, which use a single-file or paginated API instead).
 async function indexRepoSkills(repo, ref, source, install) {
     const tree = await fetchJson(`https://api.github.com/repos/${repo}/git/trees/${ref}?recursive=1`);
-    const paths = (tree.tree || []).map((entry) => entry.path).filter((file) => /(^|\/)SKILL\.md$/.test(file));
+    // Git allows almost any byte in a path component, so a tree path is external data like any
+    // other: it is interpolated both into a fetch URL and into the install: string a user may
+    // copy-paste. Validate it with the same segment allowlist used for aitmpl.com paths (which also
+    // rejects ".." segments) instead of trusting the repo to hold well-behaved directory names.
+    const paths = (tree.tree || []).map((entry) => entry.path)
+        .filter((file) => /(^|\/)SKILL\.md$/.test(file))
+        .filter((file) => safeCatalogPath(file, source));
     const records = await Promise.allSettled(paths.map(async (file) => {
         const fm = parseFrontmatter(await fetchText(`https://raw.githubusercontent.com/${repo}/${ref}/${file}`));
         return {

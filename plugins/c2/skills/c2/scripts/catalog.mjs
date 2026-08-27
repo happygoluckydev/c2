@@ -179,9 +179,11 @@ const openAIStyle = (url) => ({
 const PROVIDERS = {
     gemini: {
         keyEnv: 'GEMINI_API_KEY', model: 'text-embedding-004', batch: 100,
+        // The key travels in x-goog-api-key, not in the query string: a URL-embedded key leaks
+        // into proxy/CDN access logs and into any error message that echoes the request URL.
         request: (input, p) => [
-            `https://generativelanguage.googleapis.com/v1beta/models/${p.model}:batchEmbedContents?key=${p.key}`,
-            {},
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(p.model)}:batchEmbedContents`,
+            { 'x-goog-api-key': p.key },
             { requests: input.map((text) => ({ model: `models/${p.model}`, content: { parts: [{ text }] } })) },
         ],
         extract: (body) => body.embeddings.map((row) => row.values),

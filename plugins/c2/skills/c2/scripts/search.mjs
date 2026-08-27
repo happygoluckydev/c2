@@ -90,7 +90,7 @@ if (requested) {
     console.error('# trace: get');
     console.error(`# executedAt: ${new Date().toISOString()}`);
     console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
-    console.error(`# get: requested[${values.join(',')}] matched[${matches.map(recordId).join(',')}]`);
+    console.error(`# get: requested[${values.join(',')}] matched[${matches.map(recordId).join(',').replace(/[\t\r\n]+/g, ' ')}]`);
     console.log(JSON.stringify(matches, null, 2));
     process.exit(0);
 }
@@ -199,6 +199,12 @@ for (const row of scored) {
 const meta = readJsonSafe(META) || {};
 const executedAt = new Date().toISOString();
 
+// Every cell below can carry external text (a community skill's frontmatter name, an MCP registry
+// server name). A tab or newline inside one would break the tab-separated contract the caller
+// parses, letting a poisoned catalog entry forge extra rows or fake `#` trace lines in the output
+// the model reads back. Collapse those characters in every cell, not just in description.
+const cell = (value) => String(value ?? '').replace(/[\t\r\n]+/g, ' ');
+
 console.log('# trace: search');
 console.log(`# executedAt: ${executedAt}`);
 console.log(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
@@ -208,6 +214,13 @@ console.log(`# hits: ${Object.keys(caps).map((kind) => `${kind} matched=${(byKin
 console.log('id\tkind\tname\tsource\tmatched_fields\tdescription');
 for (const kind of Object.keys(caps)) {
     for (const row of (byKind.get(kind) || []).slice(0, caps[kind])) {
-        console.log(`${row.doc.id || `${row.doc.kind}:${row.doc.name}`}\t${row.doc.kind}\t${row.doc.name}\t${row.doc.source}\t${row.matches.join(',')}\t${(row.doc.description || '').replace(/[\t\n]/g, ' ').slice(0, 110)}`);
+        console.log([
+            cell(row.doc.id || `${row.doc.kind}:${row.doc.name}`),
+            cell(row.doc.kind),
+            cell(row.doc.name),
+            cell(row.doc.source),
+            cell(row.matches.join(',')),
+            cell(row.doc.description).slice(0, 110),
+        ].join('\t'));
     }
 }
