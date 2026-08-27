@@ -15,14 +15,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CATALOG, CATALOG_SCHEMA_VERSION, META, embedTexts, loadConfig, readJsonSafe, readVectors, resolveProvider, withCatalogMetadata } from './catalog.mjs';
+import { CATALOG, CATALOG_SCHEMA_VERSION, META, embedTexts, loadConfig, metadataWarnings, readJsonSafe, readVectors, resolveCatalogRecords, resolveProvider, withCatalogMetadata } from './catalog.mjs';
 
 const BUILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-index.mjs');
 
 const args = process.argv.slice(2);
-const option = (name) => {
-    const index = args.indexOf(`--${name}`);
-    return index >= 0 ? args[index + 1] : null;
+const USAGE = 'Usage: --all "keywords" [--task "task"] | --get "name1,name2"';
+const option = (name, { all = false } = {}) => {
+    const values = [];
+    for (let index = 0; index < args.length; index += 1) {
+        if (args[index] !== `--${name}`) continue;
+        const value = args[index + 1];
+        if (!value || value.startsWith('--')) throw new Error(USAGE);
+        values.push(value);
+        if (!all) return value;
+    }
+    return values.length ? values : null;
 };
 const query = option('all');
 // --task: the user's original task text (any language). Kept separate from the keyword string so
@@ -30,9 +38,9 @@ const query = option('all');
 // technical terms are pulled from the raw text too, and the raw text (not the keyword string) is
 // what gets embedded when vector search is on, since embeddings handle other languages natively.
 const task = option('task') || '';
-const requested = option('get');
+const requested = option('get', { all: true });
 
-if (!query && !requested) throw new Error('Usage: --all "keywords" [--task "task"] | --get "name1,name2"');
+if (!query && !requested) throw new Error(USAGE);
 
 // --- Catalog freshness ---
 // --get assumes a prior --all already confirmed the catalog exists; it only needs it to be present.
@@ -63,36 +71,21 @@ const docs = fs.readFileSync(CATALOG, 'utf8').split('\n').filter(Boolean).flatMa
 
 // --- --get: stable-ID lookup for the finalists only ---
 if (requested) {
-    const values = [...new Set(requested.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean))];
     const recordId = (doc) => String(doc.id || `${doc.kind}:${doc.name}`).toLowerCase();
-    const byId = new Map(docs.map((doc) => [recordId(doc), doc]));
-    const byName = new Map();
-    for (const doc of docs) {
-        const name = String(doc.name || '').toLowerCase();
-        if (!byName.has(name)) byName.set(name, []);
-        byName.get(name).push(doc);
-    }
-    const selected = new Set();
-    for (const value of values) {
-        if (byId.has(value)) {
-            selected.add(byId.get(value));
-            continue;
-        }
-        const matches = byName.get(value) || [];
-        if (matches.length === 1) selected.add(matches[0]);
-        else if (matches.length > 1) {
-            console.error(`Ambiguous name ${value}: ${matches.map(recordId).join(', ')}. Pass a kind:name ID to --get.`);
-        }
-    }
     // fulltext is search-only vocabulary; stripping it here keeps --get's output small.
-    const matches = docs.filter((doc) => selected.has(doc)).map(({ fulltext, ...doc }) => doc);
+    const resolution = resolveCatalogRecords(docs, requested);
+    const matches = resolution.records.map(({ fulltext, ...doc }) => doc);
     const meta = readJsonSafe(META) || {};
     console.error('# trace: get');
     console.error(`# executedAt: ${new Date().toISOString()}`);
-    console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
-    console.error(`# get: requested[${values.join(',')}] matched[${matches.map(recordId).join(',')}]`);
+    console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}${meta.degraded ? ' degraded=true' : ''}`);
+    console.error(`# get: requested[${resolution.requested.join(',')}] matched[${matches.map(recordId).join(',')}] missing[${resolution.missing.join(',')}] ambiguous[${resolution.ambiguous.join(',')}]${resolution.fallback.length ? ` fallback[${resolution.fallback.join(',')}]` : ''}`);
+    for (const { value, candidates } of resolution.ambiguousCandidates) {
+        console.error(`Ambiguous name ${value}: ${candidates.join(', ')}. Pass a kind:name ID to --get.`);
+    }
+    if (metadataWarnings.length) console.error(`# metadata-warnings: ${metadataWarnings.length}`);
     console.log(JSON.stringify(matches, null, 2));
-    process.exit(0);
+    process.exit(!matches.length && resolution.requested.length ? 1 : 0);
 }
 
 // Common English stop words are excluded so they don't dilute IDF weighting or clutter matches[].
@@ -198,16 +191,18 @@ for (const row of scored) {
 
 const meta = readJsonSafe(META) || {};
 const executedAt = new Date().toISOString();
+const sanitizeTSV = (value) => String(value ?? '').replace(/[\t\n]/g, ' ');
 
 console.log('# trace: search');
 console.log(`# executedAt: ${executedAt}`);
-console.log(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}`);
+console.log(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}${meta.degraded ? ' degraded=true' : ''}`);
 console.log(`# mode: ${mode}`);
 console.log(`# query: keywords[${keywordTokens.join(' ')}]${taskTokens.length ? ` + task[${taskTokens.join(' ')}]` : ''}`);
 console.log(`# hits: ${Object.keys(caps).map((kind) => `${kind} matched=${(byKind.get(kind) || []).length} returned=${Math.min(caps[kind], (byKind.get(kind) || []).length)}`).join(' / ')}`);
+if (metadataWarnings.length) console.log(`# metadata-warnings: ${metadataWarnings.length}`);
 console.log('id\tkind\tname\tsource\tmatched_fields\tdescription');
 for (const kind of Object.keys(caps)) {
     for (const row of (byKind.get(kind) || []).slice(0, caps[kind])) {
-        console.log(`${row.doc.id || `${row.doc.kind}:${row.doc.name}`}\t${row.doc.kind}\t${row.doc.name}\t${row.doc.source}\t${row.matches.join(',')}\t${(row.doc.description || '').replace(/[\t\n]/g, ' ').slice(0, 110)}`);
+        console.log(`${sanitizeTSV(row.doc.id || `${row.doc.kind}:${row.doc.name}`)}\t${sanitizeTSV(row.doc.kind)}\t${sanitizeTSV(row.doc.name)}\t${sanitizeTSV(row.doc.source)}\t${row.matches.join(',')}\t${sanitizeTSV(row.doc.description).slice(0, 110)}`);
     }
 }
