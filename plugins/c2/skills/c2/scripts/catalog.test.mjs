@@ -42,7 +42,7 @@ test('availability and packaging stay independent; distribution is stripped', ()
     const builtinAlias = withCatalogMetadata({
         kind: 'skill', name: 'builtin', source: 'core', distribution: 'builtin',
     });
-    assert.equal(builtinAlias.availability, 'unknown');
+    assert.equal(builtinAlias.availability, 'built-in');
     assert.equal(builtinAlias.packaging, 'built-in');
 
     const explicit = withCatalogMetadata({
@@ -102,10 +102,12 @@ test('resolver accepts IDs, unique bare names, and reports unresolved values', (
         withCatalogMetadata({ kind: 'plugin', name: 'shared', source: 'two' }),
         withCatalogMetadata({ kind: 'skill', name: 'foo, bar', source: 'one' }),
     ];
-    const result = resolveCatalogRecords(docs, ['skill:alpha,missing', 'shared', 'skill:foo, bar']);
+    const result = resolveCatalogRecords(docs, ['skill:alpha,missing', 'shared', 'shared', 'skill:foo, bar']);
     assert.deepEqual(result.records.map((entry) => entry.id), ['skill:alpha', 'skill:foo, bar']);
+    assert.deepEqual(result.requested, ['skill:alpha', 'missing', 'shared', 'skill:foo, bar']);
     assert.deepEqual(result.missing, ['missing']);
     assert.deepEqual(result.ambiguous, ['shared']);
+    assert.deepEqual(result.ambiguousCandidates, [{ value: 'shared', candidates: ['skill:shared', 'plugin:shared'] }]);
     assert.deepEqual(result.fallback, ['skill:foo, bar']);
 });
 

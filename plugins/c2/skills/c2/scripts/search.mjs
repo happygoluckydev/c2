@@ -80,10 +80,12 @@ if (requested) {
     console.error(`# executedAt: ${new Date().toISOString()}`);
     console.error(`# catalog: schema=${meta.schemaVersion || 1} builtAt=${meta.builtAt || 'unknown'} entries=${meta.total || docs.length}${meta.degraded ? ' degraded=true' : ''}`);
     console.error(`# get: requested[${resolution.requested.join(',')}] matched[${matches.map(recordId).join(',')}] missing[${resolution.missing.join(',')}] ambiguous[${resolution.ambiguous.join(',')}]${resolution.fallback.length ? ` fallback[${resolution.fallback.join(',')}]` : ''}`);
+    for (const { value, candidates } of resolution.ambiguousCandidates) {
+        console.error(`Ambiguous name ${value}: ${candidates.join(', ')}. Pass a kind:name ID to --get.`);
+    }
     if (metadataWarnings.length) console.error(`# metadata-warnings: ${metadataWarnings.length}`);
     console.log(JSON.stringify(matches, null, 2));
-    if (!matches.length && resolution.requested.length) process.exitCode = 1;
-    process.exit(matches.length ? 0 : 1);
+    process.exit(!matches.length && resolution.requested.length ? 1 : 0);
 }
 
 // Common English stop words are excluded so they don't dilute IDF weighting or clutter matches[].

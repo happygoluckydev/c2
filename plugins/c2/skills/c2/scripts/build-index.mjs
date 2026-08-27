@@ -285,13 +285,13 @@ indexMarketplace();
 // Network sources run in parallel (wall-clock = slowest source, not the sum of all of them).
 // Array order is also dedup priority below: installed (already run) -> official -> community -> registry.
 const jobs = [
-    ['openai/skills', 'openai/skills', indexOpenAISkills],
-    ['anthropics/skills', 'anthropics/skills', indexAnthropicSkills],
-    ['VoltAgent/awesome-agent-skills', 'VoltAgent/awesome-agent-skills', indexVoltAgentSkills],
-    ['aitmpl.com', 'aitmpl.com', indexTemplates],
-    ['MCP Registry', 'MCP Registry', indexMcpRegistry],
+    ['openai/skills', indexOpenAISkills],
+    ['anthropics/skills', indexAnthropicSkills],
+    ['VoltAgent/awesome-agent-skills', indexVoltAgentSkills],
+    ['aitmpl.com', indexTemplates],
+    ['MCP Registry', indexMcpRegistry],
 ];
-const results = await Promise.allSettled(jobs.map(([, , job]) => job()));
+const results = await Promise.allSettled(jobs.map(([, job]) => job()));
 results.forEach((result, index) => {
     if (result.status === 'rejected') errors.push(`${jobs[index][0]}: ${result.reason?.message || result.reason}`);
 });
@@ -311,7 +311,7 @@ if (fs.existsSync(CATALOG)) {
     }
 }
 let degraded = results.some((result) => result.status === 'rejected');
-for (const [, source,] of jobs) {
+for (const [source] of jobs) {
     const currentCount = entries.filter((entry) => entry.source === source).length;
     const previous = previousBySource.get(source) || [];
     if (currentCount === 0 && previous.length) {
@@ -324,16 +324,12 @@ for (const [, source,] of jobs) {
 const sourcePriority = new Map([
     ['installed', 0],
     ['installed-plugin', 1],
-    ['openai/skills', 10],
-    ['anthropics/skills', 20],
-    ['VoltAgent/awesome-agent-skills', 30],
-    ['aitmpl.com', 40],
-    ['MCP Registry', 50],
+    ...jobs.map(([source], index) => [source, 10 + index]),
 ]);
 entries.sort((a, b) => (sourcePriority.get(a.source) ?? 5) - (sourcePriority.get(b.source) ?? 5));
 
-// Dedup by kind+name, first entry wins. Because entries were appended in priority order above
-// (installed -> official -> community -> registry), first-wins is the same thing as priority-wins.
+// Sort by source priority before deduplication so carried-forward rows return to their source's
+// slot and first-write-wins remains equivalent to installed/official/community priority.
 const seen = new Set();
 const unique = entries.filter((entry) => {
     const key = `${entry.kind}:${entry.name}`.toLowerCase();
@@ -364,7 +360,9 @@ if (provider?.missingKey) {
 }
 
 const counts = Object.fromEntries(['skill', 'plugin', 'mcp'].map((kind) => [kind, unique.filter((entry) => entry.kind === kind).length]));
-errors.push(...metadataWarnings);
+const distinctWarnings = [...new Set(metadataWarnings)];
+errors.push(...distinctWarnings.slice(0, 20));
+if (distinctWarnings.length > 20) errors.push(`metadata warnings truncated: ${distinctWarnings.length} distinct warnings (showing first 20).`);
 const meta = { schemaVersion: CATALOG_SCHEMA_VERSION, builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, degraded, errors };
 writeAtomic(META, JSON.stringify(meta, null, 2));
 console.log(JSON.stringify(meta, null, 2));

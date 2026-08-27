@@ -81,7 +81,7 @@ function migrateDistribution(distribution) {
     if (!value) return { availability: 'unknown', packaging: 'unknown' };
     if (LEGACY_PACKAGING[value]) {
         const packaging = LEGACY_PACKAGING[value];
-        return { availability: value === 'built-in' ? 'built-in' : 'unknown', packaging };
+        return { availability: packaging === 'built-in' ? 'built-in' : 'unknown', packaging };
     }
     if (LEGACY_AVAILABILITY[value]) {
         return {
@@ -150,8 +150,13 @@ export function resolveCatalogRecords(docs, requestedValues) {
     const requested = [];
     const missing = [];
     const ambiguous = [];
+    const ambiguousCandidates = [];
     const fallback = [];
     const selected = new Set();
+    const markAmbiguous = (value, matches) => {
+        ambiguous.push(value);
+        ambiguousCandidates.push({ value, candidates: matches.map(recordId) });
+    };
     const resolve = (value) => {
         const normalized = value.trim().toLowerCase();
         if (!normalized) return;
@@ -162,12 +167,12 @@ export function resolveCatalogRecords(docs, requestedValues) {
             return;
         }
         if (idMatches.length > 1) {
-            ambiguous.push(normalized);
+            markAmbiguous(normalized, idMatches);
             return;
         }
         const nameMatches = byName.get(normalized) || [];
         if (nameMatches.length === 1) selected.add(nameMatches[0]);
-        else if (nameMatches.length > 1) ambiguous.push(normalized);
+        else if (nameMatches.length > 1) markAmbiguous(normalized, nameMatches);
         else missing.push(normalized);
     };
 
@@ -186,9 +191,10 @@ export function resolveCatalogRecords(docs, requestedValues) {
 
     return {
         records: docs.filter((doc) => selected.has(doc)),
-        requested,
+        requested: [...new Set(requested)],
         missing: [...new Set(missing)],
         ambiguous: [...new Set(ambiguous)],
+        ambiguousCandidates: ambiguousCandidates.filter((detail, index, details) => details.findIndex((candidate) => candidate.value === detail.value) === index),
         fallback: [...new Set(fallback)],
     };
 }
