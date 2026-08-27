@@ -234,6 +234,16 @@ node plugins/c2/skills/c2/scripts/prune.mjs --apply    # archive unused to ~/.co
 
 This never deletes skills, only moves them. Archiving is refused when no Codex session transcript is available, because usage cannot be determined safely.
 
+## Tests
+
+Node.js standard library only — no test framework to install. Tests run against a temporary
+`CODEX_HOME` and a fixture-backed `fetch`, so they never touch your Codex home or the network:
+
+```sh
+node --test plugins/c2/skills/c2/scripts                              # run the suite
+node --test --experimental-test-coverage plugins/c2/skills/c2/scripts # with a coverage report
+```
+
 ## 日本語
 
 **すでに複数のスキル・プラグイン・MCP を使っている人が、毎回のエコシステム探索に費やす時間を減らすためのツールです。** Claude Code 向けの姉妹プロジェクト [c3](https://github.com/happygoluckydev/c3) の Codex 移植版です。自作のスキルやプラグイン、MCP 連携を書き始める前に、エコシステムに——あるいは手元の `~/.codex/skills` や `~/.codex/plugins` に——既にあるものを探して提案します。タスクを伝えると「追加不要（手元の資産の再利用）→ インストール済みプラグイン → 公式スキル/プラグイン → コミュニティ製スキル → MCP」の優先順で最適な組み合わせを提案する Codex スキルです。

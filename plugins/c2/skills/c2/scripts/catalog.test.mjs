@@ -38,6 +38,28 @@ test('availability and packaging stay independent; distribution is stripped', ()
     assert.equal(explicit.install.includes(explicit.name), false);
 });
 
+test('an unrecognized legacy distribution degrades to unknown metadata', () => {
+    const entry = withCatalogMetadata({ kind: 'skill', name: 'legacy', source: 'unknown', distribution: 'sideloaded' });
+    assert.equal(entry.availability, 'unknown');
+    assert.equal(entry.packaging, 'unknown');
+    assert.equal(entry.maturity, 'unknown');
+    assert.deepEqual(entry.surface, ['unknown']);
+    assert.deepEqual(entry.permissions, ['unknown']);
+});
+
+test('execution aliases are expanded and unknown values are not invented', () => {
+    assert.equal(withCatalogMetadata({ kind: 'skill', name: 'a', execution: 'agent' }).execution, 'isolated-agent');
+    assert.equal(withCatalogMetadata({ kind: 'skill', name: 'a', execution: 'background' }).execution, 'background-monitor');
+    assert.equal(withCatalogMetadata({ kind: 'skill', name: 'a', execution: 'deterministic' }).execution, 'deterministic-hook');
+    assert.equal(withCatalogMetadata({ kind: 'skill', name: 'a', execution: 'telepathy' }).execution, 'unknown');
+});
+
+test('surface and permissions lists are deduplicated and trimmed', () => {
+    const entry = withCatalogMetadata({ kind: 'skill', name: 'a', surface: ' cli ', permissions: ['network', 'network', ' '] });
+    assert.deepEqual(entry.surface, ['cli']);
+    assert.deepEqual(entry.permissions, ['network']);
+});
+
 test('normalized entries expose the shared required fields', () => {
     const entry = withCatalogMetadata({
         kind: 'skill', name: 'Example', description: 'demo', source: 'installed',
