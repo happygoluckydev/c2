@@ -15,32 +15,8 @@ const entries = [];
 const home = os.homedir();
 const add = (entry) => entries.push(withCatalogMetadata({ tags: [], ...entry }));
 const ALL_SURFACES = ['cli', 'ide', 'desktop'];
-const addSkill = (entry) => {
-    const { kind, execution, packaging, surface, parentPlugin, ...rest } = {
-        kind: 'skill',
-        execution: 'prompt',
-        packaging: 'standalone',
-        surface: ALL_SURFACES,
-        ...entry,
-    };
-    add({
-        kind,
-        ...rest,
-        packaging,
-        execution,
-        surface,
-        ...(parentPlugin === undefined ? {} : { parentPlugin }),
-    });
-};
-const addPlugin = (entry) => {
-    const { packaging, surface, ...rest } = {
-        kind: 'plugin',
-        packaging: 'plugin',
-        surface: ['cli', 'desktop'],
-        ...entry,
-    };
-    add({ ...rest, packaging, surface });
-};
+const addSkill = (entry) => add({ kind: 'skill', packaging: 'standalone', execution: 'prompt', surface: ALL_SURFACES, ...entry });
+const addPlugin = (entry) => add({ kind: 'plugin', packaging: 'plugin', surface: ['cli', 'desktop'], ...entry });
 
 const fetchOk = async (url) => {
     const response = await fetch(url, { headers: { 'User-Agent': 'c2-codex-concierge' } });
@@ -95,8 +71,7 @@ function pluginNameFor(file, root) {
         if (fs.existsSync(manifest)) {
             const result = readJsonReporting(manifest, `plugin:${manifest}`);
             if (!result) return null;
-            try { return result.value.name || path.basename(directory); }
-            catch (error) { errors.push(`plugin:${manifest}: ${error.message}`); return null; }
+            return result.value.name || path.basename(directory);
         }
         const parent = path.dirname(directory);
         if (parent === directory) break;
