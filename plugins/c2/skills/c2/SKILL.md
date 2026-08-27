@@ -97,8 +97,10 @@ catalog search was skipped entirely, say so here and why.
 
 ## Maintenance
 
-- The catalog is lazily refreshed after seven days. `setup-schedule.ps1` or `setup-schedule.sh` can register a weekly refresh.
+- The catalog is lazily refreshed after seven days. `setup-schedule.ps1` or `setup-schedule.sh` can register a weekly refresh. Background refresh output is appended to `~/.codex/c2/refresh.log`; check it when the catalog keeps being reported as stale.
+- `build-index.mjs` exits non-zero when any source or the vector build failed (details in `meta.json` and on stderr) and refuses to replace an existing catalog when every network source failed.
 - `scripts/prune.mjs` audits user-installed skills against local Codex session transcripts. It is dry-run by default; `--apply` archives, rather than deletes, unused skills. Treat installation and pruning proposals with equal weight — reuse-first includes trimming what turned out to be unused.
+- `prune.mjs --apply` refuses to archive (exit code 2) when usage cannot be determined: no session transcripts at all, or any transcript that could not be read.
 
 ## Safety
 

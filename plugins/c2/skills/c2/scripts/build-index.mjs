@@ -15,8 +15,22 @@ const entries = [];
 const home = os.homedir();
 const add = (entry) => entries.push(withCatalogMetadata({ tags: [], ...entry }));
 
+// Every request is bounded: without a timeout an unresponsive source hangs the whole crawl
+// forever (the Promise.allSettled below never settles), which on a scheduled run looks like
+// nothing happening rather than a failure. A timeout turns that into a reported per-source error.
+const FETCH_TIMEOUT_MS = Number(process.env.C2_FETCH_TIMEOUT_MS) || 30_000;
 const fetchOk = async (url) => {
-    const response = await fetch(url, { headers: { 'User-Agent': 'c2-codex-concierge' } });
+    let response;
+    try {
+        response = await fetch(url, { headers: { 'User-Agent': 'c2-codex-concierge' }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    } catch (error) {
+        // fetch rejects with a bare "fetch failed" / "operation was aborted" naming neither the URL
+        // nor the cause; attach both so a source failure is diagnosable from meta.json alone.
+        const reason = error.name === 'TimeoutError'
+            ? `timed out after ${FETCH_TIMEOUT_MS}ms`
+            : `${error.message}${error.cause?.message ? ` (${error.cause.message})` : ''}`;
+        throw new Error(`${url}: ${reason}`, { cause: error });
+    }
     if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
     return response;
 };
@@ -73,8 +87,12 @@ function pluginNameFor(file, root) {
     return null;
 }
 
+// Directory listing failures land in errors[] (and therefore meta.json) instead of aborting the
+// scan of the remaining installed assets.
+const walkError = (source) => (dir, error) => errors.push(`${source}:${dir}: cannot list directory: ${error.message}`);
+
 function indexSkills(root, source) {
-    for (const file of walk(root, (candidate) => path.basename(candidate) === 'SKILL.md')) {
+    for (const file of walk(root, (candidate) => path.basename(candidate) === 'SKILL.md', walkError(source))) {
         try {
             const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
             const parentPlugin = pluginNameFor(file, root);
@@ -98,7 +116,7 @@ function indexSkills(root, source) {
 // --- Source: plugins already installed (Codex plugin dirs + the user's personal marketplace) ---
 function indexPlugins(root, source) {
     const isPluginManifest = (candidate) => path.basename(candidate) === 'plugin.json' && path.basename(path.dirname(candidate)) === '.codex-plugin';
-    for (const file of walk(root, isPluginManifest)) {
+    for (const file of walk(root, isPluginManifest, walkError(source))) {
         try {
             const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
             add({
@@ -290,9 +308,23 @@ const jobs = [
     ['MCP Registry', indexMcpRegistry],
 ];
 const results = await Promise.allSettled(jobs.map(([, job]) => job()));
+const failedSources = [];
 results.forEach((result, index) => {
-    if (result.status === 'rejected') errors.push(`${jobs[index][0]}: ${result.reason?.message || result.reason}`);
+    if (result.status === 'rejected') {
+        failedSources.push(jobs[index][0]);
+        errors.push(`${jobs[index][0]}: ${result.reason?.message || result.reason}`);
+    }
 });
+
+// Data-loss guard: when every network source fails (offline, DNS outage, rate limiting) the crawl
+// would otherwise replace a complete catalog with installed-assets-only — and search.mjs's
+// background refresh would do it invisibly. Keep the existing catalog and fail loudly instead. A
+// first run with no catalog yet still writes what it has, since installed assets beat nothing.
+if (failedSources.length === jobs.length && fs.existsSync(CATALOG)) {
+    for (const message of errors) console.error(`c2: ${message}`);
+    console.error(`c2: all ${jobs.length} network sources failed; keeping the existing catalog at ${CATALOG} instead of replacing it with installed assets only.`);
+    process.exit(1);
+}
 
 // Dedup by kind+name, first entry wins. Because entries were appended in priority order above
 // (installed -> official -> community -> registry), first-wins is the same thing as priority-wins.
@@ -308,11 +340,14 @@ const unique = entries.filter((entry) => {
 if (config.fulltext === false) for (const entry of unique) delete entry.fulltext;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+// writeAtomic throws on failure, so the process exits non-zero here rather than continuing on to
+// write a meta.json that advertises a catalog which never landed.
 writeAtomic(CATALOG, `${unique.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
 
 // Vector build (--vectors <provider>): embed name+tags+description only. Full body text isn't
 // embedded — the description is enough for routing, and it costs a fraction of the tokens.
 let vectors = false;
+let vectorsFailed = false;
 const provider = resolveProvider(config);
 if (provider?.missingKey) {
     errors.push(`vectors: ${provider.missingKey} is not set; using lexical search.`);
@@ -322,10 +357,24 @@ if (provider?.missingKey) {
         const vectorsData = await embedTexts(texts, provider);
         writeVectors(vectorsData, { provider: provider.name, model: provider.model, builtAt: new Date().toISOString() });
         vectors = true;
-    } catch (error) { errors.push(`vectors: ${error.message}`); }
+    } catch (error) {
+        // Vectors were explicitly configured, so failing to build them is a real fault (reflected
+        // in the exit code below), not the default lexical-only path.
+        vectorsFailed = true;
+        errors.push(`vectors: ${error.message}`);
+    }
 }
 
 const counts = Object.fromEntries(['skill', 'plugin', 'mcp'].map((kind) => [kind, unique.filter((entry) => entry.kind === kind).length]));
-const meta = { schemaVersion: CATALOG_SCHEMA_VERSION, builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, errors };
-fs.writeFileSync(META, JSON.stringify(meta, null, 2));
+const meta = { schemaVersion: CATALOG_SCHEMA_VERSION, builtAt: new Date().toISOString(), total: unique.length, counts, fulltext: config.fulltext !== false, vectors, errors, failedSources };
+writeAtomic(META, JSON.stringify(meta, null, 2));
 console.log(JSON.stringify(meta, null, 2));
+
+// meta.json alone is not enough of a signal: cron and the detached background refresh in search.mjs
+// discard stdout, so a partially failed crawl used to look exactly like a clean one. Mirror the
+// failures on stderr and exit non-zero so a scheduler (or a human running it by hand) sees them.
+if (failedSources.length || vectorsFailed) {
+    for (const message of errors) console.error(`c2: ${message}`);
+    console.error(`c2: catalog written to ${CATALOG} with ${failedSources.length} failed source(s)${vectorsFailed ? ' and a failed vector build' : ''}; results may be incomplete.`);
+    process.exitCode = 1;
+}

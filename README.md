@@ -201,6 +201,11 @@ is older than 7 days, or its schema version differs from the current implementat
 catalog is used immediately and a rebuild starts in the background (HTTP only, no LLM). Legacy
 entries receive conservative `unknown` metadata while that rebuild is in progress.
 
+A background or scheduled rebuild has no console to complain to, so its output is logged
+(`~/.codex/c2/refresh.log` for the background refresh, `~/.codex/c2/cron.log` for the scheduled
+job). It exits non-zero when a source fails, and if *every* network source fails it keeps the
+existing catalog instead of replacing it with a much smaller one.
+
 To refresh on a fixed schedule instead:
 
 ```sh

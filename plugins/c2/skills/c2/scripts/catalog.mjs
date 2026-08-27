@@ -16,6 +16,9 @@ export const CATALOG = path.join(DATA_DIR, 'catalog.jsonl');
 export const META = path.join(DATA_DIR, 'meta.json');
 export const VEC_BIN = path.join(DATA_DIR, 'vectors.bin');
 export const VEC_META = path.join(DATA_DIR, 'vectors.json');
+// Output sink for the detached background catalog refresh started by search.mjs: its streams have
+// no reader, so without a file its errors would be lost entirely.
+export const REFRESH_LOG = path.join(DATA_DIR, 'refresh.log');
 export const CATALOG_SCHEMA_VERSION = 3;
 const CONFIG = path.join(DATA_DIR, 'config.json');
 
@@ -125,20 +128,38 @@ export function withCatalogMetadata(entry) {
 }
 
 // Write-then-rename so a crash mid-write can never leave catalog.jsonl / meta.json truncated
-// or corrupted for the next search.mjs invocation.
+// or corrupted for the next search.mjs invocation. A failed write or rename is rethrown (the
+// caller must not treat a half-written store as success) after removing the temp file, so a
+// failing data dir doesn't accumulate `.tmp` leftovers on every run.
 export function writeAtomic(file, data) {
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, data);
-    fs.renameSync(tmp, file);
+    try {
+        fs.writeFileSync(tmp, data);
+        fs.renameSync(tmp, file);
+    } catch (error) {
+        try { fs.rmSync(tmp, { force: true }); } catch { /* best effort: the original error matters more */ }
+        throw new Error(`Failed to write ${file}: ${error.message}`, { cause: error });
+    }
 }
 
 // Recursively collect files under root matching predicate. Skips .git/node_modules so scanning
 // a user's Codex home (which may contain cloned plugin repos) stays fast and side-effect free.
-export function walk(root, predicate) {
+// onError(dir, error) is called for a directory that cannot be listed (permissions, a broken
+// symlink, a disappearing temp dir) and the walk continues with the rest: one such directory used
+// to abort the entire scan, so a whole catalog source or prune audit could be lost to it. Callers
+// that need to know the listing was incomplete pass onError; the default reports on stderr.
+export function walk(root, predicate, onError = (dir, error) => console.error(`c2: cannot list ${dir}: ${error.message}`)) {
     const files = [];
     if (!fs.existsSync(root)) return files;
     const visit = (dir) => {
-        for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+        let items;
+        try {
+            items = fs.readdirSync(dir, { withFileTypes: true });
+        } catch (error) {
+            onError(dir, error);
+            return;
+        }
+        for (const item of items) {
             if (item.name === '.git' || item.name === 'node_modules') continue;
             const file = path.join(dir, item.name);
             if (item.isDirectory()) visit(file);
@@ -246,16 +267,34 @@ export function writeVectors(vectors, meta) {
 // The byte-length check uses fs.statSync (metadata only) before fs.readFileSync, so a corrupted
 // or truncated vectors.bin is rejected without paying for reading it into memory first.
 // (/code-review, ported from the equivalent c3 fix)
+// A rejected vector store degrades search to lexical-only, which looks like a quality regression
+// rather than a fault, so every rejection reason is reported on stderr instead of returning a
+// bare null: the fix (re-run the build with --vectors) is only discoverable if the mismatch is said
+// out loud. A vector store that was never built (no meta file) is not a fault and stays quiet.
 export function readVectors(expectedCount) {
     const meta = readJsonSafe(VEC_META);
-    if (!meta || !meta.dims || (expectedCount != null && meta.count !== expectedCount)) return null;
+    if (!meta) return null;
+    if (!meta.dims) {
+        console.error(`c2: ignoring vector store ${VEC_META}: missing embedding dimensions; rebuild the catalog with vectors enabled.`);
+        return null;
+    }
+    if (expectedCount != null && meta.count !== expectedCount) {
+        console.error(`c2: ignoring vector store: it holds ${meta.count} vectors but the catalog has ${expectedCount} entries; rebuild the catalog with vectors enabled.`);
+        return null;
+    }
     const expectedBytes = meta.dims * meta.count * Float32Array.BYTES_PER_ELEMENT;
     try {
-        if (fs.statSync(VEC_BIN).size !== expectedBytes) return null;
+        const size = fs.statSync(VEC_BIN).size;
+        if (size !== expectedBytes) {
+            console.error(`c2: ignoring vector store ${VEC_BIN}: expected ${expectedBytes} bytes but found ${size}; rebuild the catalog with vectors enabled.`);
+            return null;
+        }
         const data = fs.readFileSync(VEC_BIN);
         return { meta, data: new Float32Array(data.buffer, data.byteOffset, data.length / 4) };
     } catch (error) {
-        if (error.code !== 'ENOENT') console.error(`c2: ignoring invalid vectors file ${VEC_BIN}: ${error.message}`);
+        // ENOENT is a fault here (unlike in readJsonSafe): the meta file above says a vector store
+        // exists, so a missing .bin means a half-written store, not "vectors were never built".
+        console.error(`c2: ignoring unreadable vectors file ${VEC_BIN}: ${error.message}`);
         return null;
     }
 }
