@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
-import { CATALOG_SCHEMA_VERSION, inferSourceClass, withCatalogMetadata } from './catalog.mjs';
+import { CATALOG_SCHEMA_VERSION, entryId, inferSourceClass, kindName, readFrontmatterFile, withCatalogMetadata } from './catalog.mjs';
 
 const REQUIRED = [
     'id', 'platform', 'kind', 'name', 'description', 'source', 'availability', 'packaging',
@@ -52,4 +55,25 @@ test('only known publisher sources receive a provenance classification', () => {
     assert.equal(inferSourceClass('openai/skills'), 'official');
     assert.equal(inferSourceClass('VoltAgent/awesome-agent-skills'), 'community');
     assert.equal(inferSourceClass('MCP Registry'), 'unknown');
+});
+
+test('entry IDs prefer explicit IDs and derive kind/name IDs', () => {
+    assert.equal(entryId({ id: 'custom', kind: 'skill', name: 'Example' }), 'custom');
+    assert.equal(entryId({ kind: 'skill', name: 'Example' }), 'skill:Example');
+    assert.equal(kindName({ id: 'custom', kind: 'plugin', name: 'Demo' }), 'plugin:Demo');
+});
+
+test('readFrontmatterFile parses a frontmatter fixture', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'c2-catalog-test-'));
+    const file = path.join(directory, 'SKILL.md');
+    try {
+        fs.writeFileSync(file, '---\nname: Fixture\ndescription: A test fixture\n---\nBody text\n');
+        const result = readFrontmatterFile(file);
+        assert.equal(result.name, 'Fixture');
+        assert.equal(result.description, 'A test fixture');
+        assert.equal(result.body, 'Body text');
+        assert.ok(result.fmLen > 0);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });
